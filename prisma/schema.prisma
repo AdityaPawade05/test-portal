@@ -1,0 +1,220 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Phase 1 schema — see Technical Build Spec section 4.
+// Claude Code should treat this as the starting migration and
+// extend it per phase.
+// ─────────────────────────────────────────────────────────────
+
+model Organization {
+  id        String         @id @default(cuid())
+  name      String
+  users     User[]
+  banks     QuestionBank[]
+  tests     Test[]
+  createdAt DateTime       @default(now())
+}
+
+model User {
+  id             String       @id @default(cuid())
+  email          String       @unique
+  passwordHash   String
+  role           Role         @default(ADMIN)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  VIEWER
+}
+
+model QuestionBank {
+  id             String       @id @default(cuid())
+  name           String
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  questions      Question[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @default(now()) @updatedAt
+
+  @@index([organizationId])
+}
+
+model Question {
+  id         String       @id @default(cuid())
+  bankId     String
+  bank       QuestionBank @relation(fields: [bankId], references: [id])
+  type       QType
+  stem       String // markdown supported
+  mediaUrl   String? // pre-rendered chart/image
+  options    Option[]
+  responses  Response[]
+  // correctOptionIds is server-only; never serialize to candidate
+  difficulty Float        @default(0.5) // provisional until calibrated
+  tags       String[]
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @default(now()) @updatedAt
+
+  @@index([bankId])
+}
+
+enum QType {
+  MCQ_SINGLE
+  MCQ_MULTI
+  NUMERIC
+  LIKERT
+}
+
+model Option {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String
+  isCorrect  Boolean  @default(false) // NEVER sent to candidate client
+  order      Int
+
+  @@unique([questionId, order])
+}
+
+model Test {
+  id             String       @id @default(cuid())
+  name           String
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  sections       Section[]
+  invitations    Invitation[]
+  published      Boolean      @default(false)
+  // 0-100 raw-percentage pass threshold; null = no pass/fail determination (spec section 6)
+  cutoffPercent  Float?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @default(now()) @updatedAt
+
+  @@index([organizationId])
+}
+
+model Section {
+  id            String   @id @default(cuid())
+  testId        String
+  test          Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  name          String
+  order         Int
+  timeLimitSec  Int
+  questionCount Int // how many to serve
+  poolStrategy  Pool     @default(FIXED)
+  questionIds   String[] // pool to draw from
+
+  @@unique([testId, order])
+}
+
+enum Pool {
+  FIXED
+  RANDOM_POOL
+}
+
+model Invitation {
+  id        String       @id @default(cuid())
+  testId    String
+  // Restrict: a test with existing invitations can't be deleted (see /api/tests/[id] DELETE guard)
+  test      Test         @relation(fields: [testId], references: [id], onDelete: Restrict)
+  email     String
+  token     String       @unique // used in the magic link
+  status    InviteStatus @default(SENT)
+  expiresAt DateTime
+  attempt   Attempt?
+  createdAt DateTime     @default(now())
+  // Null until the candidate opens their dashboard — drives the "new invitation" notification badge.
+  viewedAt  DateTime?
+
+  @@index([testId])
+  @@index([email])
+}
+
+// Candidates authenticate separately from admin Users (see types/next-auth.d.ts
+// "kind" discriminator) and aren't scoped to an Organization — the same
+// candidate can be invited to tests across multiple organizations.
+model Candidate {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+}
+
+enum InviteStatus {
+  SENT
+  STARTED
+  SUBMITTED
+  EXPIRED
+}
+
+model Attempt {
+  id             String            @id @default(cuid())
+  invitationId   String            @unique
+  invitation     Invitation        @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  startedAt      DateTime?
+  submittedAt    DateTime?
+  currentSection Int               @default(0)
+  // Durable mirror of the active Redis session state, keyed by section `order`:
+  // { [order]: { sectionStartedAt: number, timeLimitSec: number, servedQuestionIds: string[] } }
+  // Redis holds the hot cursor; this is what the session engine rehydrates from on a Redis flush
+  // (spec section 13, "Redis durability caveat" — cursor itself is re-derived from Response rows).
+  sectionState   Json?
+  responses      Response[]
+  score          Score?
+  events         ProctoringEvent[]
+}
+
+model Response {
+  id              String   @id @default(cuid())
+  attemptId       String
+  attempt         Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId      String
+  // Restrict: a question with recorded responses can't be deleted (see /api/questions/[id] DELETE guard)
+  question        Question @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  chosenOptionIds String[]
+  numericValue    Float?
+  timeSpentMs     Int
+  answeredAt      DateTime @default(now())
+
+  @@unique([attemptId, questionId]) // idempotent writes
+  @@index([questionId])
+}
+
+model Score {
+  id           String   @id @default(cuid())
+  attemptId    String   @unique
+  attempt      Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  rawBySection Json // { sectionId: rawScore }
+  rawTotal     Float
+  percentile   Float? // Phase 3+
+  passed       Boolean?
+  computedAt   DateTime @default(now())
+}
+
+model ProctoringEvent {
+  id         String   @id @default(cuid())
+  attemptId  String
+  attempt    Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  type       String // TAB_BLUR, PASTE, TIME_ANOMALY ...
+  payload    Json?
+  occurredAt DateTime @default(now())
+
+  @@index([attemptId])
+}
