@@ -91,11 +91,11 @@ export function rowsToRecords(rows: string[][]): Record<string, string>[] {
 export function normalizeBulkRow(raw: Record<string, string>): BulkRowResult {
   const findValue = (...keys: string[]) => {
     for (const key of keys) {
-      const target = key.toLowerCase().replace(/[\s_.]+/g, "");
+      const target = key.toLowerCase().replace(/[\s_.-]+/g, "");
       for (const [rawKey, rawVal] of Object.entries(raw)) {
-        const cleanKey = rawKey.toLowerCase().replace(/[\s_.]+/g, "");
+        const cleanKey = rawKey.toLowerCase().replace(/[\s_.-]+/g, "");
         if (
-          (cleanKey === target || cleanKey.includes(target)) &&
+          cleanKey === target &&
           rawVal !== undefined &&
           rawVal !== null &&
           String(rawVal).trim() !== ""
@@ -141,8 +141,8 @@ export function normalizeBulkRow(raw: Record<string, string>): BulkRowResult {
   let typeRaw = findValue("type", "questiontype", "qtype", "kind").toUpperCase();
   if (!typeRaw) {
     const hasOptions =
-      findValue("options", "option", "choices", "answers") !== "" ||
-      Object.keys(raw).some((k) => /^(option|choice)[_\s]*[a-d1-9]/i.test(k.trim()));
+      findValue("options", "choices", "optionlist", "answers") !== "" ||
+      Object.keys(raw).some((k) => /^(?:option|choice)?[_\s.-]*[a-h1-8]$/i.test(k.trim()));
     typeRaw = hasOptions ? "MCQ_SINGLE" : "NUMERIC";
   }
 
@@ -166,7 +166,7 @@ export function normalizeBulkRow(raw: Record<string, string>): BulkRowResult {
   }
 
   let optionLabels: string[] = [];
-  const optionsRaw = findValue("options", "option", "choices", "answers");
+  const optionsRaw = findValue("options", "choices", "optionlist", "answers");
   if (optionsRaw) {
     optionLabels = optionsRaw
       .split(/[;\n|]/)
@@ -176,11 +176,11 @@ export function normalizeBulkRow(raw: Record<string, string>): BulkRowResult {
     const optionEntries: { index: number; label: string }[] = [];
     for (const [rawKey, rawVal] of Object.entries(raw)) {
       if (!rawVal || !String(rawVal).trim()) continue;
-      const cleanKey = rawKey.toLowerCase().replace(/[\s_]+/g, "");
-      const matchLetter = cleanKey.match(/^option([a-z])$/);
-      const matchNum = cleanKey.match(/^option([1-9])$/);
+      const cleanKey = rawKey.toLowerCase().replace(/[\s_.-]+/g, "");
+      const matchLetter = cleanKey.match(/^(?:option|choice)?([a-h])$/i);
+      const matchNum = cleanKey.match(/^(?:option|choice)?([1-8])$/i);
       if (matchLetter) {
-        const idx = "abcdefghijklmnopqrstuvwxyz".indexOf(matchLetter[1]);
+        const idx = "abcdefgh".indexOf(matchLetter[1].toLowerCase());
         optionEntries.push({ index: idx, label: String(rawVal).trim() });
       } else if (matchNum) {
         const idx = parseInt(matchNum[1], 10) - 1;
@@ -204,29 +204,51 @@ export function normalizeBulkRow(raw: Record<string, string>): BulkRowResult {
     "answer",
     "correctanswer",
     "rightanswer",
+    "key",
+    "ans",
+    "solution",
   );
+
   const correctTokens = correctRaw
     .split(/[,;|\n]/)
     .map((c) => c.trim())
     .filter(Boolean);
   const correctIndices: number[] = [];
 
-  for (const token of correctTokens) {
-    const n = Number(token);
+  for (const rawToken of correctTokens) {
+    // Clean token: strip "Option ", "Choice ", "(", ")", "[", "]", ".", ":", etc.
+    const cleaned = rawToken
+      .replace(/^(?:option|choice)\s*/i, "")
+      .replace(/^[\(\[\{]([^\)\]\}]+)[\)\]\}]$/, "$1")
+      .replace(/[\.:]$/, "")
+      .trim();
+
+    const n = Number(cleaned);
     if (Number.isInteger(n) && n >= 1 && n <= optionLabels.length) {
       correctIndices.push(n);
     } else {
-      const letterIndex = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".indexOf(token.toUpperCase());
+      const letterIndex = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".indexOf(cleaned.toUpperCase());
       if (letterIndex >= 0 && letterIndex < optionLabels.length) {
         correctIndices.push(letterIndex + 1);
       } else {
-        const labelIdx = optionLabels.findIndex((l) => l.toLowerCase() === token.toLowerCase());
+        const labelIdx = optionLabels.findIndex(
+          (l) => l.toLowerCase() === rawToken.toLowerCase() || l.toLowerCase() === cleaned.toLowerCase(),
+        );
         if (labelIdx >= 0) {
           correctIndices.push(labelIdx + 1);
         } else {
+          // If token starts with letter followed by option text, e.g. "A) Paris"
+          const prefixLetterMatch = rawToken.match(/^([A-Ha-h])[\.\)\:\-]\s*(.*)/);
+          if (prefixLetterMatch) {
+            const lIdx = "abcdefgh".indexOf(prefixLetterMatch[1].toLowerCase());
+            if (lIdx >= 0 && lIdx < optionLabels.length) {
+              correctIndices.push(lIdx + 1);
+              continue;
+            }
+          }
           return {
             ok: false,
-            error: `correctOptions must be 1-based indices (1-${optionLabels.length}), letters (A, B...), or option text, got "${token}"`,
+            error: `correctOptions must be 1-based indices (1-${optionLabels.length}), letters (A, B...), or option text, got "${rawToken}"`,
           };
         }
       }
@@ -266,9 +288,8 @@ export function validateScannedQuestion(q: Partial<ScannedQuestion>): { isValid:
       if (options.some((o) => !o.label.trim())) {
         errors.push("Option labels cannot be empty");
       }
-      const mcqError = requireCorrectOptionForMcq(type, options);
-      if (mcqError) {
-        errors.push(mcqError);
+      if (!options.some((o) => o.isCorrect)) {
+        errors.push("No correct option selected — click an option to mark it as correct");
       }
       if (type === "MCQ_SINGLE" && options.filter((o) => o.isCorrect).length > 1) {
         errors.push("MCQ_SINGLE allows only one correct option");
@@ -289,4 +310,5 @@ export function validateScannedQuestion(q: Partial<ScannedQuestion>): { isValid:
     errors,
   };
 }
+
 

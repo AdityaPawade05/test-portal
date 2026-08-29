@@ -1,0 +1,10 @@
+aws_region      = "ap-south-1"
+environment     = "prod"
+app_name        = "assessment-portal"
+container_image = "123456789012.dkr.ecr.ap-south-1.amazonaws.com/assessment-portal:latest"
+
+db_name     = "assessment_portal"
+db_username = "postgres"
+db_password = "ReplaceWithSecurePassword123!"
+
+auth_secret = "ReplaceWithRandomGeneratedAuthSecret32Chars+"

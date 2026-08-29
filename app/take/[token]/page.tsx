@@ -63,6 +63,7 @@ export default function TakeTestPage() {
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [inFullscreen, setInFullscreen] = useState(true);
+  const [webcamVerified, setWebcamVerified] = useState(false);
 
   const questionShownAt = useRef(0);
   const attemptIdRef = useRef<string | null>(null);
@@ -71,39 +72,55 @@ export default function TakeTestPage() {
     phaseRef.current = phase;
   }, [phase]);
 
-  const logEvent = useCallback((type: string) => {
+  const logEvent = useCallback((type: string, payload?: unknown) => {
     if (!attemptIdRef.current) return;
     fetch(`/api/attempt/${attemptIdRef.current}/event`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type }),
+      body: JSON.stringify({ type, payload }),
     }).catch(() => {});
   }, []);
 
   const fetchNext = useCallback(async (id: string) => {
-    const res = await fetch(`/api/attempt/${id}/next`);
-    const data: NextResult = await res.json();
-
-    if (data.done) {
-      setPhase("submitting");
-      const submitRes = await fetch(`/api/attempt/${id}/submit`, { method: "POST" });
-      if (submitRes.ok) {
-        const submitData = await submitRes.json();
-        setScore(submitData.score ?? null);
-        setPhase("submitted");
-      } else {
-        setErrorMessage("Could not submit your test. Please contact the organizer.");
+    try {
+      const res = await fetch(`/api/attempt/${id}/next`);
+      if (!res.ok) {
+        setErrorMessage("Could not load the next question. Please try refreshing.");
         setPhase("error");
+        return;
       }
-      return;
-    }
+      const data: NextResult = await res.json();
 
-    setNext(data);
-    setRemainingMs(data.remainingMs);
-    setChosenOptionIds([]);
-    setNumericValue("");
-    questionShownAt.current = Date.now();
-    setPhase("in-progress");
+      if (data.done) {
+        setPhase("submitting");
+        try {
+          const submitRes = await fetch(`/api/attempt/${id}/submit`, { method: "POST" });
+          if (submitRes.ok) {
+            const submitData = await submitRes.json();
+            setScore(submitData.score ?? null);
+            setPhase("submitted");
+          } else {
+            setErrorMessage("Could not submit your test. Please contact the organizer.");
+            setPhase("error");
+          }
+        } catch {
+          setErrorMessage("Network error while submitting your test.");
+          setPhase("error");
+        }
+        return;
+      }
+
+      setNext(data);
+      setRemainingMs(data.remainingMs);
+      setChosenOptionIds([]);
+      setNumericValue("");
+      questionShownAt.current = Date.now();
+      setPhase("in-progress");
+    } catch (err) {
+      console.error("[fetchNext] Error:", err);
+      setErrorMessage("Network error while fetching the question.");
+      setPhase("error");
+    }
   }, []);
 
   useEffect(() => {
@@ -184,30 +201,118 @@ export default function TakeTestPage() {
     return () => clearInterval(interval);
   }, [phase, attemptId, fetchNext]);
 
+  const [violationsCount, setViolationsCount] = useState(0);
+  const [showViolationModal, setShowViolationModal] = useState(false);
+  const [violationReason, setViolationReason] = useState("");
+
+  const MAX_VIOLATIONS = 3;
+
+  const triggerAutoSubmit = useCallback(
+    async (reason: string) => {
+      if (!attemptIdRef.current || phaseRef.current === "submitted" || phaseRef.current === "submitting") return;
+      setErrorMessage(reason);
+      setPhase("submitting");
+      logEvent("AUTO_SUBMIT_VIOLATIONS", { reason });
+      try {
+        const submitRes = await fetch(`/api/attempt/${attemptIdRef.current}/submit`, { method: "POST" });
+        if (submitRes.ok) {
+          const submitData = await submitRes.json();
+          setScore(submitData.score ?? null);
+          setPhase("submitted");
+        } else {
+          setPhase("error");
+        }
+      } catch {
+        setPhase("error");
+      }
+    },
+    [logEvent]
+  );
+
+  const registerViolation = useCallback(
+    (reason: string) => {
+      if (phaseRef.current !== "in-progress") return;
+
+      logEvent("PROCTORING_VIOLATION", { reason });
+      setViolationReason(reason);
+
+      setViolationsCount((prev) => {
+        const nextCount = prev + 1;
+        if (nextCount >= MAX_VIOLATIONS) {
+          triggerAutoSubmit(`Assessment automatically submitted due to multiple proctoring violations (${nextCount}/${MAX_VIOLATIONS}).`);
+        } else {
+          setShowViolationModal(true);
+        }
+        return nextCount;
+      });
+    },
+    [logEvent, triggerAutoSubmit]
+  );
+
   useEffect(() => {
     function handleVisibility() {
-      if (document.visibilityState === "hidden") logEvent("TAB_BLUR");
+      if (document.visibilityState === "hidden") {
+        registerViolation("Switched browser tab or minimized window");
+      }
     }
-    function handlePaste() {
-      logEvent("PASTE");
+    function handleWindowBlur() {
+      if (phaseRef.current === "in-progress") {
+        registerViolation("Lost window focus (switched app or secondary monitor)");
+      }
+    }
+    function handlePaste(e: ClipboardEvent) {
+      e.preventDefault();
+      logEvent("PASTE_PREVENTED");
+    }
+    function handleCopyCut(e: ClipboardEvent) {
+      e.preventDefault();
+      logEvent("COPY_CUT_PREVENTED");
+    }
+    function handleContextMenu(e: MouseEvent) {
+      e.preventDefault();
+      logEvent("RIGHT_CLICK_PREVENTED");
+    }
+    function handleSelectStart(e: Event) {
+      // Allow input field selection, block test question selection
+      const target = e.target as HTMLElement;
+      if (target && target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") {
+        e.preventDefault();
+      }
+    }
+    function handleDragStart(e: DragEvent) {
+      e.preventDefault();
+      logEvent("DRAG_PREVENTED");
     }
     function handleFullscreenChange() {
       const active = document.fullscreenElement != null;
       setInFullscreen(active);
-      // Only a genuine mid-test exit is a proctoring signal — the app itself
-      // calls exitFullscreen() once the test ends, which fires this same
-      // event and must not be logged as candidate-initiated.
-      if (!active && phaseRef.current === "in-progress") logEvent("FULLSCREEN_EXIT");
+      if (!active && phaseRef.current === "in-progress") {
+        registerViolation("Exited full-screen mode");
+      }
     }
+
     document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("blur", handleWindowBlur);
     document.addEventListener("paste", handlePaste);
+    document.addEventListener("copy", handleCopyCut);
+    document.addEventListener("cut", handleCopyCut);
+    document.addEventListener("contextmenu", handleContextMenu);
+    document.addEventListener("selectstart", handleSelectStart);
+    document.addEventListener("dragstart", handleDragStart);
     document.addEventListener("fullscreenchange", handleFullscreenChange);
+
     return () => {
       document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("blur", handleWindowBlur);
       document.removeEventListener("paste", handlePaste);
+      document.removeEventListener("copy", handleCopyCut);
+      document.removeEventListener("cut", handleCopyCut);
+      document.removeEventListener("contextmenu", handleContextMenu);
+      document.removeEventListener("selectstart", handleSelectStart);
+      document.removeEventListener("dragstart", handleDragStart);
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
-  }, [logEvent]);
+  }, [logEvent, registerViolation]);
 
   // Don't leave the candidate stranded in full-screen once there's nothing
   // left for them to do here.
@@ -223,13 +328,35 @@ export default function TakeTestPage() {
     }
   }, [phase]);
 
-  // Keyboard shortcuts: Enter confirms the current answer and advances;
-  // number keys pick the corresponding option (skipped while typing in the
-  // numeric-answer field so digits type normally there).
+  // Keyboard shortcuts & Anti-DevTools / Anti-Screenshot guard
   useEffect(() => {
     if (phase !== "in-progress" || !next) return;
 
     function handleKeydown(e: KeyboardEvent) {
+      const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+      const keyUpper = e.key.toUpperCase();
+
+      // Guard against Screenshot (PrintScreen)
+      if (e.key === "PrintScreen" || e.key === "Snapshot") {
+        e.preventDefault();
+        logEvent("PRINTSCREEN_ATTEMPT");
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText("").catch(() => {});
+        }
+        return;
+      }
+
+      // Guard against Developer Tools & Inspect Element shortcuts
+      if (
+        e.key === "F12" ||
+        (isCmdOrCtrl && e.shiftKey && (keyUpper === "I" || keyUpper === "J" || keyUpper === "C")) ||
+        (isCmdOrCtrl && (keyUpper === "U" || keyUpper === "S" || keyUpper === "P"))
+      ) {
+        e.preventDefault();
+        logEvent("DEVTOOLS_ATTEMPT", { key: e.key });
+        return;
+      }
+
       if (e.key === "Enter") {
         e.preventDefault();
         submitAnswer();
@@ -253,7 +380,7 @@ export default function TakeTestPage() {
     document.addEventListener("keydown", handleKeydown);
     return () => document.removeEventListener("keydown", handleKeydown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, next]);
+  }, [phase, next, logEvent]);
 
   async function submitAnswer() {
     if (!attemptId || !next) return;
@@ -261,24 +388,27 @@ export default function TakeTestPage() {
     setErrorMessage(null);
 
     const timeSpentMs = Date.now() - questionShownAt.current;
-    const res = await fetch(`/api/attempt/${attemptId}/answer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        questionId: next.question.id,
-        chosenOptionIds,
-        numericValue: numericValue === "" ? undefined : Number(numericValue),
-        timeSpentMs,
-      }),
-    });
+    try {
+      const res = await fetch(`/api/attempt/${attemptId}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          questionId: next.question.id,
+          chosenOptionIds,
+          numericValue: numericValue === "" ? undefined : Number(numericValue),
+          timeSpentMs,
+        }),
+      });
 
-    setSubmittingAnswer(false);
-
-    // SECTION_EXPIRED just means the server's clock beat us here — move on,
-    // the next fetch will land on whatever section the server says we're in.
-    await fetchNext(attemptId);
-    if (!res.ok && res.status !== 409) {
-      setErrorMessage("Could not save that answer — it may not have been recorded.");
+      setSubmittingAnswer(false);
+      await fetchNext(attemptId);
+      if (!res.ok && res.status !== 409) {
+        setErrorMessage("Could not save that answer — it may not have been recorded.");
+      }
+    } catch (err) {
+      console.error("[submitAnswer] Error:", err);
+      setSubmittingAnswer(false);
+      setErrorMessage("Network error while saving answer.");
     }
   }
 
@@ -303,21 +433,32 @@ export default function TakeTestPage() {
   }
   if (phase === "ready") {
     return (
-      <StatusScreen>
-        <p className="text-lg font-medium text-slate-900">{testName}</p>
-        <p className="max-w-sm text-sm text-slate-500">
-          {sectionCount} timed section{sectionCount === 1 ? "" : "s"}. Once you start, each
-          section&apos;s clock runs continuously in the background — closing or refreshing this
-          tab does not pause it.
-        </p>
-        <p className="max-w-sm text-xs text-slate-400">
-          This test runs in full-screen. Tab switches, pastes, and full-screen exits are recorded
-          against your attempt.
-        </p>
-        <Button className="mt-2" onClick={beginTest}>
-          Start test
-        </Button>
-      </StatusScreen>
+      <main className="flex min-h-screen flex-col bg-slate-50">
+        {attemptId && (
+          <WebcamProctor
+            attemptId={attemptId}
+            verified={webcamVerified}
+            onVerified={() => setWebcamVerified(true)}
+            onStartTest={beginTest}
+            onViolation={registerViolation}
+          />
+        )}
+        <StatusScreen>
+          <p className="text-lg font-medium text-slate-900">{testName}</p>
+          <p className="max-w-sm text-sm text-slate-500">
+            {sectionCount} timed section{sectionCount === 1 ? "" : "s"}. Once you start, each
+            section&apos;s clock runs continuously in the background — closing or refreshing this
+            tab does not pause it.
+          </p>
+          <p className="max-w-sm text-xs text-slate-400">
+            This test runs in full-screen. Tab switches, pastes, and full-screen exits are recorded
+            against your attempt.
+          </p>
+          <Button className="mt-2" onClick={beginTest}>
+            Start test
+          </Button>
+        </StatusScreen>
+      </main>
     );
   }
   if (phase === "already-submitted" || phase === "submitted") {
@@ -400,7 +541,14 @@ export default function TakeTestPage() {
 
   return (
     <main className="flex min-h-screen flex-col bg-slate-50">
-      {attemptId && <WebcamProctor attemptId={attemptId} />}
+      {attemptId && (
+        <WebcamProctor
+          attemptId={attemptId}
+          verified={webcamVerified}
+          onVerified={() => setWebcamVerified(true)}
+          onViolation={registerViolation}
+        />
+      )}
       {!inFullscreen && (
         <div className="border-b border-amber-200 bg-amber-50 px-6 py-2">
           <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
@@ -462,7 +610,7 @@ export default function TakeTestPage() {
       </header>
 
       <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-10">
-        <div key={question.id} className="animate-fade-in rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+        <div key={question.id} className="animate-fade-in select-none rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
           <p className="text-lg leading-relaxed text-slate-900">{question.stem}</p>
           {question.mediaUrl && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -530,6 +678,37 @@ export default function TakeTestPage() {
           </div>
         </div>
       </div>
+
+      {showViolationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-100 text-rose-600 text-xl font-bold">
+              ⚠️
+            </div>
+            <h3 className="mt-3 text-lg font-bold text-slate-900">
+              Proctoring Violation Warning ({violationsCount}/{MAX_VIOLATIONS})
+            </h3>
+            <p className="mt-2 text-sm text-slate-600">
+              An action violating test integrity rules was detected:
+            </p>
+            <p className="mt-1 rounded-lg bg-amber-50 p-2.5 text-xs font-semibold text-amber-900">
+              &quot;{violationReason}&quot;
+            </p>
+            <p className="mt-3 text-xs text-slate-500 leading-relaxed">
+              Exceeding <span className="font-bold text-rose-600">{MAX_VIOLATIONS} violations</span> will result in the immediate automatic submission of your assessment attempt.
+            </p>
+            <Button
+              className="mt-5 w-full bg-rose-600 hover:bg-rose-700 text-white font-medium"
+              onClick={() => {
+                setShowViolationModal(false);
+                reenterFullscreen();
+              }}
+            >
+              I Understand & Resume Test →
+            </Button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

@@ -41,7 +41,7 @@ function recordsToScannedQuestions(records: Record<string, string>[]): ScannedQu
         id,
         originalRow,
         type: (record.type as QuestionType) || "MCQ_SINGLE",
-        stem: record.stem || "",
+        stem: record.stem || Object.values(record)[0] || "",
         mediaUrl: record.mediaurl || null,
         tags: (record.tags || "").split(/[,;]/).map((t) => t.trim()).filter(Boolean),
         options: (record.options || "").split(";").map((o) => ({ label: o.trim(), isCorrect: false })),
@@ -87,7 +87,7 @@ async function scanExcelSpreadsheet(buffer: Buffer): Promise<ScannedQuestion[]> 
 
   // 1. Detect header row by scanning first 10 rows for header keywords
   let headerRowNumber = 1;
-  const keywords = ["stem", "question", "prompt", "type", "option", "choice", "answer", "correct", "tag"];
+  const keywords = ["stem", "question", "prompt", "type", "option", "choice", "answer", "correct", "tag", "ans", "key"];
 
   let foundHeader = false;
   for (let r = 1; r <= Math.min(worksheet.rowCount, 10); r++) {
@@ -95,7 +95,7 @@ async function scanExcelSpreadsheet(buffer: Buffer): Promise<ScannedQuestion[]> 
     let matches = 0;
     row.eachCell({ includeEmpty: false }, (cell) => {
       const txt = getCellValueString(cell.value).toLowerCase().trim();
-      if (txt.length < 40 && keywords.some((kw) => txt.includes(kw))) {
+      if (txt.length < 50 && keywords.some((kw) => txt.includes(kw))) {
         matches++;
       }
     });
@@ -107,7 +107,7 @@ async function scanExcelSpreadsheet(buffer: Buffer): Promise<ScannedQuestion[]> 
   }
 
   if (!foundHeader) {
-    // If no row matched header keywords, find the first non-empty row as header
+    // If no row matched header keywords, find the first row with at least 2 non-empty cells
     for (let r = 1; r <= Math.min(worksheet.rowCount, 10); r++) {
       const row = worksheet.getRow(r);
       let cellCount = 0;
@@ -122,7 +122,7 @@ async function scanExcelSpreadsheet(buffer: Buffer): Promise<ScannedQuestion[]> 
   // 2. Extract header row names
   const headers: string[] = [];
   worksheet.getRow(headerRowNumber).eachCell({ includeEmpty: true }, (cell, colNumber) => {
-    headers[colNumber - 1] = getCellValueString(cell.value).toLowerCase();
+    headers[colNumber - 1] = getCellValueString(cell.value).toLowerCase().trim();
   });
 
   // 3. Extract records from rows following headerRowNumber
@@ -144,21 +144,24 @@ async function scanExcelSpreadsheet(buffer: Buffer): Promise<ScannedQuestion[]> 
 }
 
 async function scanWordDocument(buffer: Buffer): Promise<ScannedQuestion[]> {
-  // Extract both HTML (for tables) and raw text (for Q&A text patterns)
+  // Extract HTML (for tables & formatting) and raw text (for Q&A patterns)
   const htmlResult = await mammoth.convertToHtml({ buffer });
   const rawTextResult = await mammoth.extractRawText({ buffer });
 
   const html = htmlResult.value || "";
   const rawText = rawTextResult.value || "";
 
-  // 1. Check if Word document has HTML tables
+  // 1. First check if Word document has an HTML table with question columns
   const tableRecords = extractRecordsFromWordHtmlTable(html);
   if (tableRecords.length > 0) {
-    return recordsToScannedQuestions(tableRecords);
+    const tableQuestions = recordsToScannedQuestions(tableRecords);
+    if (tableQuestions.length > 0) {
+      return tableQuestions;
+    }
   }
 
-  // 2. Parse text blocks (Q1. Stem, A) Option 1, Answer: A)
-  return parseWordTextQuestions(rawText);
+  // 2. Otherwise, parse structured Q&A text format
+  return parseWordTextQuestions(rawText, html);
 }
 
 function extractRecordsFromWordHtmlTable(html: string): Record<string, string>[] {
@@ -170,6 +173,7 @@ function extractRecordsFromWordHtmlTable(html: string): Record<string, string>[]
     const rowMatches = tableHtml.match(/<tr[\s\S]*?<\/tr>/gi);
     if (!rowMatches || rowMatches.length < 2) continue;
 
+    // Extract headers from the first row
     const headers: string[] = [];
     const firstRowCells = rowMatches[0].match(/<t[dh][\s\S]*?<\/t[dh]>/gi);
     if (firstRowCells) {
@@ -179,7 +183,17 @@ function extractRecordsFromWordHtmlTable(html: string): Record<string, string>[]
       });
     }
 
-    if (!headers.some((h) => h.includes("stem") || h.includes("question"))) {
+    const hasStemHeader = headers.some(
+      (h) =>
+        h.includes("stem") ||
+        h.includes("question") ||
+        h.includes("prompt") ||
+        h.includes("problem") ||
+        h === "q" ||
+        h.includes("title"),
+    );
+
+    if (!hasStemHeader && headers.length < 2) {
       continue;
     }
 
@@ -188,18 +202,48 @@ function extractRecordsFromWordHtmlTable(html: string): Record<string, string>[]
       if (!cells) continue;
 
       const record: Record<string, string> = {};
+
       headers.forEach((h, i) => {
-        if (!h || !cells[i]) return;
-        const text = cells[i].replace(/<[^>]+>/g, "").trim();
-        if (h.includes("stem") || h.includes("question")) record["stem"] = text;
-        else if (h.includes("type")) record["type"] = text;
-        else if (h.includes("media")) record["mediaurl"] = text;
-        else if (h.includes("tag")) record["tags"] = text;
-        else if (h.includes("correct") || h.includes("answer")) record["correctoptions"] = text;
-        else if (h.includes("option")) record["options"] = text;
+        if (!cells[i]) return;
+        const text = cells[i]
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<\/p>/gi, "\n")
+          .replace(/<[^>]+>/g, "")
+          .trim();
+        if (!text) return;
+
+        const cleanH = h.replace(/[\s_.-]+/g, "");
+
+        if (cleanH.includes("stem") || cleanH.includes("question") || cleanH.includes("prompt") || cleanH.includes("problem") || cleanH === "q") {
+          record["stem"] = text;
+        } else if (cleanH.includes("type") || cleanH === "kind") {
+          record["type"] = text;
+        } else if (cleanH.includes("media") || cleanH.includes("image")) {
+          record["mediaurl"] = text;
+        } else if (cleanH.includes("tag") || cleanH.includes("topic") || cleanH.includes("subject") || cleanH.includes("category")) {
+          record["tags"] = text;
+        } else if (
+          cleanH.includes("correct") ||
+          cleanH.includes("answer") ||
+          cleanH.includes("key") ||
+          cleanH.includes("ans") ||
+          cleanH.includes("solution")
+        ) {
+          record["correctoptions"] = text;
+        } else if (/^(?:option|choice)?([a-h])$/i.test(cleanH)) {
+          const letter = cleanH.match(/^(?:option|choice)?([a-h])$/i)![1].toLowerCase();
+          record[`option${letter}`] = text;
+        } else if (/^(?:option|choice)?([1-8])$/i.test(cleanH)) {
+          const num = cleanH.match(/^(?:option|choice)?([1-8])$/i)![1];
+          record[`option${num}`] = text;
+        } else if (cleanH.includes("option") || cleanH.includes("choice") || cleanH.includes("choices")) {
+          record["options"] = text;
+        } else {
+          record[h || `col_${i + 1}`] = text;
+        }
       });
 
-      if (record["stem"]) {
+      if (record["stem"] || Object.values(record).some((v) => v !== "")) {
         records.push(record);
       }
     }
@@ -208,11 +252,20 @@ function extractRecordsFromWordHtmlTable(html: string): Record<string, string>[]
   return records;
 }
 
-function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
-  const lines = rawText
+function parseWordTextQuestions(rawText: string, htmlContent?: string): ScannedQuestion[] {
+  // Normalize text: handle non-breaking spaces, CRLF, smart quotes
+  const normalizedText = rawText
+    .replace(/\u00A0/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
+
+  const lines = normalizedText
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
+
+  // 1. Check for global Answer Key section at the bottom/top of document
+  const answerKeyMap = extractAnswerKeySection(lines);
 
   const scannedItems: ScannedQuestion[] = [];
   let currentStem = "";
@@ -224,12 +277,17 @@ function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
   let itemCounter = 0;
 
   function pushCurrentQuestion() {
-    if (!currentStem) return;
+    if (!currentStem.trim()) return;
 
     itemCounter++;
     const id = `scan_doc_${itemCounter}_${Date.now()}`;
 
-    // Determine type automatically if not set
+    // If answers were not found in the question block, look up in global Answer Key map
+    if (currentAnswers.length === 0 && answerKeyMap.has(itemCounter)) {
+      currentAnswers.push(...(answerKeyMap.get(itemCounter) || []));
+    }
+
+    // Determine question type automatically
     let type: QuestionType = currentType || "MCQ_SINGLE";
     if (!currentType) {
       if (currentOptions.length === 0) {
@@ -241,26 +299,53 @@ function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
       }
     }
 
-    // Match answer letters/indices to options
+    // Match answer indicators to options
     if (currentAnswers.length > 0 && currentOptions.length > 0) {
       currentAnswers.forEach((ans) => {
-        const cleaned = ans.toUpperCase().trim();
-        // Check if letter A, B, C, D...
+        const rawAns = ans.trim();
+        const cleaned = rawAns
+          .replace(/^(?:option|choice)\s*/i, "")
+          .replace(/^[\(\[\{]([^\)\]\}]+)[\)\]\}]$/, "$1")
+          .replace(/[\.:]$/, "")
+          .toUpperCase()
+          .trim();
+
+        // 1. Check letter index: A -> 0, B -> 1, C -> 2, D -> 3...
         const letterIdx = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".indexOf(cleaned);
         if (letterIdx >= 0 && letterIdx < currentOptions.length) {
           currentOptions[letterIdx].isCorrect = true;
+          return;
         }
-        // Check if 1-based number
+
+        // 2. Check 1-based number: 1 -> 0, 2 -> 1...
         const num = parseInt(cleaned, 10);
         if (!isNaN(num) && num >= 1 && num <= currentOptions.length) {
           currentOptions[num - 1].isCorrect = true;
+          return;
         }
-        // Check if exact option label text match
+
+        // 3. Check exact or prefix match against option labels
+        let matched = false;
         currentOptions.forEach((opt) => {
-          if (opt.label.trim().toLowerCase() === cleaned.toLowerCase()) {
+          const optLabel = opt.label.trim().toLowerCase();
+          const cleanAnsLower = cleaned.toLowerCase();
+          const rawAnsLower = rawAns.toLowerCase();
+          if (optLabel === cleanAnsLower || optLabel === rawAnsLower) {
             opt.isCorrect = true;
+            matched = true;
           }
         });
+
+        if (matched) return;
+
+        // 4. Check if answer starts with a letter like "A) Articulate"
+        const prefixMatch = rawAns.match(/^([A-Ha-h])[\.\)\:\-]\s*(.*)/);
+        if (prefixMatch) {
+          const pIdx = "abcdefgh".indexOf(prefixMatch[1].toLowerCase());
+          if (pIdx >= 0 && pIdx < currentOptions.length) {
+            currentOptions[pIdx].isCorrect = true;
+          }
+        }
       });
     }
 
@@ -268,7 +353,7 @@ function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
       id,
       originalRow: itemCounter,
       type,
-      stem: currentStem,
+      stem: currentStem.trim(),
       mediaUrl: currentMediaUrl,
       tags: currentTags,
       options: currentOptions,
@@ -280,7 +365,7 @@ function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
       id,
       originalRow: itemCounter,
       type,
-      stem: currentStem,
+      stem: currentStem.trim(),
       mediaUrl: currentMediaUrl,
       tags: currentTags,
       options: currentOptions,
@@ -288,7 +373,7 @@ function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
       errors: validation.errors,
     });
 
-    // Reset accumulator
+    // Reset accumulator for next question
     currentStem = "";
     currentOptions = [];
     currentAnswers = [];
@@ -297,24 +382,46 @@ function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
     currentMediaUrl = null;
   }
 
-  const questionHeaderRegex = /^(?:q(?:uestion)?\s*\d*[\.\:\-]|[\d]+[\.\)])\s*(.*)/i;
-  const optionRegex = /^(?:[A-Da-d0-9][\.\)]|\([A-Da-d0-9]\))\s*(.*)/;
-  const answerRegex = /^(?:answer|correct answer|correct|ans|key)\s*[:\-]\s*(.*)/i;
-  const typeRegex = /^type\s*[:\-]\s*(.*)/i;
-  const tagsRegex = /^tags?\s*[:\-]\s*(.*)/i;
-  const mediaRegex = /^media(?:url)?\s*[:\-]\s*(.*)/i;
+  // Regex patterns for Q&A structures
+  const questionHeaderRegex = /^(?:q(?:uestion)?\s*[\.\:\-\#]?\s*\d+[\.\:\-\)]|\b\d+[\.\)\:\-]|\[\d+\]|\(\d+\))\s*(.*)/i;
+  const standaloneQuestionRegex = /^(?:question\s*\d+|q\s*\d+)$/i;
 
-  for (const line of lines) {
-    const qMatch = line.match(questionHeaderRegex);
-    const optMatch = line.match(optionRegex);
+  // Option prefixes: A), a), (A), [A], Option A:, Choice A, 1), A.
+  const optionRegex = /^(?:(?:\*|\(correct\)|\(ans\))\s*)?(?:\(([a-h0-9])\)|\[([a-h0-9])\]|([a-h0-9])[\.\)\:\-]|\b(?:option|choice)\s+([a-h0-9])[\.\)\:\-]?)\s*(.*)/i;
+  const inlineCorrectIndicatorRegex = /(?:\*|\(correct\)|\[correct\]|\(ans\)|\(answer\)|\(correct\s*option\))\s*$/i;
+
+  // Answer indicators: Answer: A, Ans. A, Correct Answer: Option A, Right Answer: B, Ans: [C]
+  const answerRegex = /^(?:answer|correct\s*answer|correct\s*option|correct\s*choice|right\s*answer|correct|ans|key|solution)\s*(?:is|\=|\:|\-|\.)\s*(.*)/i;
+  const typeRegex = /^(?:type|question\s*type|kind)\s*[:\-.]\s*(.*)/i;
+  const tagsRegex = /^(?:tags?|category|topic|subject)\s*[:\-.]\s*(.*)/i;
+  const mediaRegex = /^(?:media(?:url)?|image(?:url)?)\s*[:\-.]\s*(.*)/i;
+  const explanationRegex = /^(?:explanation|rationale|solution\s*notes?|note)\s*[:\-.]\s*(.*)/i;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Skip section divider markers like "---", "===", or Answer Key section lines
+    if (line.match(/^[\=\-\_]{3,}$/) || line.match(/^(?:answer\s*key|answers\s*:?|answer\s*sheet)\b/i)) {
+      continue;
+    }
+
     const ansMatch = line.match(answerRegex);
     const typeMatch = line.match(typeRegex);
     const tagsMatch = line.match(tagsRegex);
     const mediaMatch = line.match(mediaRegex);
+    const expMatch = line.match(explanationRegex);
+    const optMatch = line.match(optionRegex);
+    const qMatch = line.match(questionHeaderRegex);
+    const isStandaloneQ = line.match(standaloneQuestionRegex);
 
     if (ansMatch) {
       const rawAns = ansMatch[1].trim();
-      currentAnswers.push(...rawAns.split(/[,;]/).map((a) => a.trim()).filter(Boolean));
+      // Split multiple answers (e.g. "A, B, C" or "A and B" or "1;2")
+      const tokens = rawAns
+        .split(/[,;&]|\band\b/i)
+        .map((a) => a.trim())
+        .filter(Boolean);
+      currentAnswers.push(...tokens);
     } else if (typeMatch) {
       const t = typeMatch[1].trim().toUpperCase() as QuestionType;
       if (["MCQ_SINGLE", "MCQ_MULTI", "NUMERIC", "LIKERT"].includes(t)) {
@@ -325,24 +432,89 @@ function parseWordTextQuestions(rawText: string): ScannedQuestion[] {
       currentTags.push(...rawTags.split(/[,;]/).map((t) => t.trim()).filter(Boolean));
     } else if (mediaMatch) {
       currentMediaUrl = mediaMatch[1].trim() || null;
-    } else if (qMatch) {
+    } else if (expMatch) {
+      // Explanation lines: skip or ignore gracefully
+      continue;
+    } else if (isStandaloneQ) {
+      // Handle "QUESTION 1" on its own line
+      pushCurrentQuestion();
+      // Lookahead to take next line as stem
+      if (i + 1 < lines.length && !lines[i + 1].match(optionRegex) && !lines[i + 1].match(answerRegex)) {
+        currentStem = lines[i + 1].trim();
+        i++;
+      }
+    } else if (qMatch && !isOptionLine(line, currentOptions.length)) {
+      // New question detected
       pushCurrentQuestion();
       currentStem = qMatch[1].trim() || line;
     } else if (optMatch) {
+      // Option line detected
+      const labelText = (optMatch[5] || "").trim();
+      const hasInlineCorrect =
+        line.startsWith("*") ||
+        line.toLowerCase().startsWith("(correct)") ||
+        line.toLowerCase().startsWith("(ans)") ||
+        inlineCorrectIndicatorRegex.test(line);
+
+      const cleanedLabel = labelText.replace(inlineCorrectIndicatorRegex, "").trim();
+
       currentOptions.push({
-        label: optMatch[1].trim(),
-        isCorrect: false,
+        label: cleanedLabel || labelText || line,
+        isCorrect: hasInlineCorrect,
       });
     } else {
+      // Text continuity
       if (!currentStem) {
         currentStem = line;
-      } else if (currentOptions.length === 0 && !currentAnswers.length) {
+      } else if (currentOptions.length === 0 && currentAnswers.length === 0) {
+        // Multi-line question stem (e.g. comprehension passages or code snippets)
         currentStem += "\n" + line;
+      } else if (currentOptions.length > 0 && currentAnswers.length === 0) {
+        // Append multi-line option text
+        currentOptions[currentOptions.length - 1].label += " " + line;
       }
     }
   }
 
+  // Push the final question
   pushCurrentQuestion();
 
   return scannedItems;
+}
+
+// Helper to check if a numbered line like "1) ..." is an option rather than a new question
+function isOptionLine(line: string, currentOptionsCount: number): boolean {
+  // If we already have options and the line starts with an option letter (e.g. B, C, D)
+  const letterMatch = line.match(/^([a-hA-H])[\.\)\:\-]\s+/);
+  if (letterMatch && currentOptionsCount > 0) {
+    return true;
+  }
+  return false;
+}
+
+// Helper to extract a separate Answer Key block at bottom of document
+function extractAnswerKeySection(lines: string[]): Map<number, string[]> {
+  const map = new Map<number, string[]>();
+  let inKeySection = false;
+
+  for (const line of lines) {
+    if (line.match(/^(?:answer\s*key|answers|answer\s*sheet|keys?)\s*[:\-]?$/i)) {
+      inKeySection = true;
+      continue;
+    }
+
+    if (inKeySection) {
+      // Match patterns like "1. A", "1-A", "1: A", "1) B", "1. (A)", "Q1: A"
+      const pairMatches = line.matchAll(/(?:q(?:uestion)?\s*)?(\d+)[\.\:\-\)\s]+(?:\(([a-h0-9]+)\)|\[([a-h0-9]+)\]|([a-h0-9]+))/gi);
+      for (const m of pairMatches) {
+        const qNum = parseInt(m[1], 10);
+        const ans = m[2] || m[3] || m[4];
+        if (!isNaN(qNum) && ans) {
+          map.set(qNum, [ans.trim()]);
+        }
+      }
+    }
+  }
+
+  return map;
 }

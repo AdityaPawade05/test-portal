@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
         type: body.type,
         stem: body.stem,
         mediaUrl: body.mediaUrl,
-        tags: body.tags,
+        tags: Array.from(new Set([...(body.tags || []), "typed"])),
         options: {
           create: body.options.map((o, i) => ({
             label: o.label,

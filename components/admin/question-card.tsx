@@ -151,13 +151,35 @@ export function QuestionCard({ question }: { question: Question }) {
     );
   }
 
+  const isUploaded = (question.tags || []).some(
+    (t) =>
+      t.toLowerCase() === "uploaded" ||
+      t.toLowerCase() === "source:uploaded" ||
+      t.toLowerCase() === "bulk" ||
+      t.toLowerCase() === "imported" ||
+      t.toLowerCase() === "file" ||
+      t.toLowerCase() === "device" ||
+      t.toLowerCase().startsWith("file:"),
+  );
+
   return (
     <Card className="p-4 transition-shadow hover:shadow-md">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {isUploaded ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-sky-50 border border-sky-200 px-2 py-0.5 text-[11px] font-bold text-sky-700 shadow-2xs">
+              <span>📤</span>
+              <span>Uploaded</span>
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-md bg-violet-50 border border-violet-200 px-2 py-0.5 text-[11px] font-bold text-violet-700 shadow-2xs">
+              <span>✍️</span>
+              <span>Typed</span>
+            </span>
+          )}
           <Badge variant="info">{question.type}</Badge>
           <code
-            className="truncate text-xs text-slate-300"
+            className="truncate text-xs text-slate-400"
             title="Question ID — used when building test sections"
           >
             {question.id}

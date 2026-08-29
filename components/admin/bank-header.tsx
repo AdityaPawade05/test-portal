@@ -11,9 +11,11 @@ import { PencilIcon, TrashIcon, UploadIcon } from "@/components/ui/icons";
 export function BankHeader({
   bank,
   questionCount,
+  onOpenDeviceUpload,
 }: {
   bank: { id: string; name: string };
   questionCount: number;
+  onOpenDeviceUpload?: () => void;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -72,16 +74,16 @@ export function BankHeader({
 
   if (editing) {
     return (
-      <form onSubmit={handleRename} className="mt-2 flex flex-wrap items-center gap-2">
+      <form onSubmit={handleRename} className="mt-3 flex flex-wrap items-center gap-2 p-4 rounded-2xl bg-indigo-50/40 border border-indigo-200">
         <Input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="min-w-0 flex-1 text-lg sm:max-w-sm"
+          className="min-w-0 flex-1 text-sm font-bold bg-white sm:max-w-sm h-9"
         />
-        <div className="flex shrink-0 gap-2">
-          <Button type="submit" size="sm" disabled={saving}>
-            {saving && <Spinner className="h-3.5 w-3.5 text-white" />}
+        <div className="flex shrink-0 gap-1.5">
+          <Button type="submit" size="sm" disabled={saving} className="h-9 px-3 text-xs font-bold">
+            {saving && <Spinner className="h-3 w-3 text-white mr-1" />}
             Save
           </Button>
           <Button
@@ -94,49 +96,79 @@ export function BankHeader({
               setName(bank.name);
               setError(null);
             }}
+            className="h-9 text-xs"
           >
             Cancel
           </Button>
         </div>
-        {error && <p className="w-full text-sm text-red-600">{error}</p>}
+        {error && <p className="w-full text-xs font-semibold text-red-600 mt-1">{error}</p>}
       </form>
     );
   }
 
   return (
-    <div>
-      <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
-        <h1 className="min-w-0 break-words text-2xl font-semibold text-slate-900">{bank.name}</h1>
+    <div className="mt-3 p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-600 font-bold text-xl shadow-inner">
+            📁
+          </span>
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-xl font-extrabold text-slate-900">{bank.name}</h1>
+              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-bold text-slate-700">
+                {questionCount} {questionCount === 1 ? "question" : "questions"}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Author questions, configure multiple options, or upload directly from Word/Excel files.
+            </p>
+          </div>
+        </div>
+
         {confirmingDelete ? (
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <span className="text-xs text-slate-500">Delete this bank?</span>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 bg-red-50 p-1.5 rounded-xl border border-red-200">
+            <span className="text-xs font-bold text-red-800 px-1">Delete this bank?</span>
             <Button
               type="button"
               variant="secondary"
               size="sm"
               disabled={deleting}
               onClick={() => setConfirmingDelete(false)}
+              className="h-7 text-xs px-2"
             >
               Cancel
             </Button>
-            <Button type="button" variant="danger" size="sm" disabled={deleting} onClick={handleDelete}>
-              {deleting && <Spinner className="h-3.5 w-3.5 text-white" />}
-              {deleting ? "Deleting…" : "Delete"}
+            <Button type="button" variant="danger" size="sm" disabled={deleting} onClick={handleDelete} className="h-7 text-xs px-2 font-bold">
+              {deleting && <Spinner className="h-3 w-3 text-white mr-1" />}
+              {deleting ? "Deleting…" : "Confirm"}
             </Button>
           </div>
         ) : (
-          <div className="flex shrink-0 items-center gap-2">
-            <Link
-              href={`/banks/${bank.id}/upload`}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
-            >
-              <UploadIcon className="h-3.5 w-3.5" />
-              Upload Questions
-            </Link>
+          <div className="flex shrink-0 items-center gap-2 text-xs font-semibold">
+            {onOpenDeviceUpload ? (
+              <button
+                type="button"
+                onClick={onOpenDeviceUpload}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition-colors"
+              >
+                <UploadIcon className="h-3.5 w-3.5" />
+                Upload from Device
+              </button>
+            ) : (
+              <Link
+                href={`/banks/${bank.id}/upload`}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition-colors"
+              >
+                <UploadIcon className="h-3.5 w-3.5" />
+                Upload from Device
+              </Link>
+            )}
+
             <button
               type="button"
               onClick={() => setEditing(true)}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              className="flex items-center gap-1 rounded-xl px-2.5 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
             >
               <PencilIcon className="h-3.5 w-3.5" />
               Rename
@@ -144,19 +176,17 @@ export function BankHeader({
             <button
               type="button"
               onClick={() => setConfirmingDelete(true)}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-400 hover:bg-red-50 hover:text-red-600"
+              className="flex items-center rounded-xl p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+              title="Delete bank"
             >
-              <TrashIcon className="h-3.5 w-3.5" />
-              Delete
+              <TrashIcon className="h-4 w-4" />
             </button>
           </div>
         )}
       </div>
-      <p className="text-sm text-slate-500">
-        {questionCount} question{questionCount === 1 ? "" : "s"}
-      </p>
+
       {error && !confirmingDelete && (
-        <p className="mt-1 text-sm text-red-600">{error}</p>
+        <p className="mt-2 text-xs font-semibold text-red-600">{error}</p>
       )}
     </div>
   );

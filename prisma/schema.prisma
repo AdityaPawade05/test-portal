@@ -129,18 +129,19 @@ enum Pool {
 }
 
 model Invitation {
-  id        String       @id @default(cuid())
-  testId    String
+  id            String       @id @default(cuid())
+  testId        String
   // Restrict: a test with existing invitations can't be deleted (see /api/tests/[id] DELETE guard)
-  test      Test         @relation(fields: [testId], references: [id], onDelete: Restrict)
-  email     String
-  token     String       @unique // used in the magic link
-  status    InviteStatus @default(SENT)
-  expiresAt DateTime
-  attempt   Attempt?
-  createdAt DateTime     @default(now())
+  test          Test         @relation(fields: [testId], references: [id], onDelete: Restrict)
+  email         String
+  candidateName String?      // optional — used to personalise the invitation email greeting
+  token         String       @unique // used in the magic link
+  status        InviteStatus @default(SENT)
+  expiresAt     DateTime
+  attempt       Attempt?
+  createdAt     DateTime     @default(now())
   // Null until the candidate opens their dashboard — drives the "new invitation" notification badge.
-  viewedAt  DateTime?
+  viewedAt      DateTime?
 
   @@index([testId])
   @@index([email])

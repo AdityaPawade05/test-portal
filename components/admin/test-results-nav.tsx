@@ -14,9 +14,10 @@ export function TestResultsNav({
   const pathname = usePathname();
 
   const tabs = [
-    { label: "Candidate Results", href: `/tests/${testId}/results` },
-    { label: "Analytics Dashboard", href: `/tests/${testId}/analytics` },
-    { label: "Proctoring Review", href: `/tests/${testId}/proctoring` },
+    { label: "🛠️ Test Builder & Sections", href: `/tests/${testId}/builder` },
+    { label: "📊 Candidate Results", href: `/tests/${testId}/results` },
+    { label: "📈 Analytics", href: `/tests/${testId}/analytics` },
+    { label: "👁️ Proctoring Review", href: `/tests/${testId}/proctoring` },
   ];
 
   return (

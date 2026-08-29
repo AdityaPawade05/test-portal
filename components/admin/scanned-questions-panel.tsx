@@ -112,6 +112,40 @@ export function ScannedQuestionsPanel({
     setEditingQuestion(null);
   }
 
+  function handleToggleOptionCorrect(questionId: string, optionIndex: number) {
+    setQuestions((prev) =>
+      prev.map((q) => {
+        if (q.id !== questionId) return q;
+
+        let nextOptions = [...q.options];
+        if (q.type === "MCQ_SINGLE" || !q.type) {
+          nextOptions = nextOptions.map((opt, idx) => ({
+            ...opt,
+            isCorrect: idx === optionIndex,
+          }));
+        } else if (q.type === "MCQ_MULTI") {
+          nextOptions = nextOptions.map((opt, idx) =>
+            idx === optionIndex ? { ...opt, isCorrect: !opt.isCorrect } : opt,
+          );
+        }
+
+        const val = validateScannedQuestion({ ...q, options: nextOptions });
+        const updated: ScannedQuestion = {
+          ...q,
+          options: nextOptions,
+          isValid: val.isValid,
+          errors: val.errors,
+        };
+
+        if (updated.isValid && !selectedIds.has(updated.id)) {
+          setSelectedIds((s) => new Set([...s, updated.id]));
+        }
+
+        return updated;
+      }),
+    );
+  }
+
   function handleAddNewQuestion() {
     const newId = `manual_${Date.now()}`;
     const newQ: ScannedQuestion = {
@@ -299,6 +333,7 @@ export function ScannedQuestionsPanel({
               question={q}
               isSelected={selectedIds.has(q.id)}
               onToggleSelect={() => toggleSelectQuestion(q.id)}
+              onToggleOptionCorrect={(optIdx) => handleToggleOptionCorrect(q.id, optIdx)}
               onEdit={() => setEditingQuestion(q)}
               onDelete={() => handleDeleteQuestion(q.id)}
             />
@@ -359,12 +394,14 @@ function ScannedQuestionRow({
   question: q,
   isSelected,
   onToggleSelect,
+  onToggleOptionCorrect,
   onEdit,
   onDelete,
 }: {
   question: ScannedQuestion;
   isSelected: boolean;
   onToggleSelect: () => void;
+  onToggleOptionCorrect?: (optionIndex: number) => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -472,27 +509,44 @@ function ScannedQuestionRow({
             </div>
           )}
 
-          {/* Options Preview */}
+          {/* Options Preview with 1-click correct answer toggle */}
           {(expanded || q.options.length > 0) && (
             <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2">
-              {q.options.map((opt, i) => (
-                <div
-                  key={i}
-                  className={`flex items-center gap-2 rounded px-2.5 py-1 text-xs ${
-                    opt.isCorrect
-                      ? "bg-emerald-50 text-emerald-900 border border-emerald-200 font-semibold"
-                      : "bg-slate-50 text-slate-700"
-                  }`}
-                >
-                  <span className="font-mono text-slate-400">{String.fromCharCode(65 + i)})</span>
-                  <span className="flex-1">{opt.label}</span>
-                  {opt.isCorrect && (
-                    <span className="inline-flex items-center gap-0.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-800">
-                      <CheckIcon className="h-3 w-3" /> Correct Answer
+              {!q.isValid && (
+                <p className="text-[11px] font-medium text-amber-800 mb-1">
+                  👆 Click an option to mark it as the correct answer:
+                </p>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {q.options.map((opt, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => onToggleOptionCorrect?.(i)}
+                    className={`flex items-center gap-2 rounded px-2.5 py-1.5 text-xs text-left transition-all border ${
+                      opt.isCorrect
+                        ? "bg-emerald-50 text-emerald-950 border-emerald-400 font-semibold shadow-xs"
+                        : "bg-slate-50 text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 cursor-pointer"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                        opt.isCorrect
+                          ? "bg-emerald-600 text-white"
+                          : "bg-slate-200 text-slate-600"
+                      }`}
+                    >
+                      {String.fromCharCode(65 + i)}
                     </span>
-                  )}
-                </div>
-              ))}
+                    <span className="flex-1 truncate">{opt.label}</span>
+                    {opt.isCorrect && (
+                      <span className="inline-flex items-center gap-0.5 rounded bg-emerald-100 px-1.5 py-0.2 text-[10px] text-emerald-800">
+                        <CheckIcon className="h-2.5 w-2.5" /> Correct
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

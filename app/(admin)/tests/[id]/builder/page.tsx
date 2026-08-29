@@ -1,10 +1,9 @@
 import { notFound } from "next/navigation";
-import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { TestBuilder } from "@/components/admin/test-builder";
 import { InviteForm } from "@/components/admin/invite-form";
-import { ChevronLeftIcon } from "@/components/ui/icons";
+import { TestResultsNav } from "@/components/admin/test-results-nav";
 
 export default async function TestBuilderPage({
   params,
@@ -25,35 +24,46 @@ export default async function TestBuilderPage({
     }),
     db.questionBank.findMany({
       where: { organizationId },
-      include: { questions: { select: { id: true, stem: true, type: true } } },
+      include: {
+        questions: {
+          select: {
+            id: true,
+            stem: true,
+            type: true,
+            tags: true,
+            createdAt: true,
+            options: {
+              select: { id: true, label: true, isCorrect: true },
+              orderBy: { order: "asc" },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        },
+      },
       orderBy: { name: "asc" },
     }),
   ]);
   if (!test) notFound();
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10 sm:px-8">
-      <Link
-        href="/dashboard"
-        className="inline-flex items-center gap-1 text-sm text-slate-500 transition-colors hover:text-slate-700"
-      >
-        <ChevronLeftIcon className="h-4 w-4" />
-        Dashboard
-      </Link>
-      <h1 className="mt-2 text-2xl font-semibold text-slate-900">{test.name}</h1>
+    <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+      <TestResultsNav testId={test.id} testName={test.name} />
 
-      <div className="mt-6">
+      <div className="mt-4">
         <TestBuilder
           test={{ ...test, invitationCount: test._count.invitations }}
           banks={banks}
         />
       </div>
 
-      <section className="mt-12">
-        <h2 className="text-base font-semibold text-slate-900">Invite candidates</h2>
-        <div className="mt-3">
-          <InviteForm testId={test.id} published={test.published} />
+      <section className="mt-14 border-t border-slate-200 pt-8">
+        <div className="mb-4">
+          <h2 className="text-lg font-bold text-slate-900">✉️ Candidate Invitations &amp; Access Links</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Invite candidates via email or generate single-use assessment access links.
+          </p>
         </div>
+        <InviteForm testId={test.id} published={test.published} />
       </section>
     </main>
   );

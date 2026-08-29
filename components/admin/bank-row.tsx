@@ -69,17 +69,17 @@ export function BankRow({ bank }: { bank: Bank }) {
     return (
       <form
         onSubmit={handleRename}
-        className="flex flex-wrap items-center gap-2 px-5 py-3"
+        className="flex flex-wrap items-center gap-2 px-5 py-3.5 bg-indigo-50/30"
       >
         <Input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="min-w-0 flex-1 sm:max-w-xs"
+          className="min-w-0 flex-1 sm:max-w-xs h-8.5 text-xs font-semibold"
         />
-        <div className="flex shrink-0 gap-2">
-          <Button type="submit" size="sm" disabled={saving}>
-            {saving && <Spinner className="h-3.5 w-3.5 text-white" />}
+        <div className="flex shrink-0 gap-1.5">
+          <Button type="submit" size="sm" disabled={saving} className="h-8.5 text-xs font-bold">
+            {saving && <Spinner className="h-3 w-3 text-white mr-1" />}
             Save
           </Button>
           <Button
@@ -92,36 +92,41 @@ export function BankRow({ bank }: { bank: Bank }) {
               setName(bank.name);
               setError(null);
             }}
+            className="h-8.5 text-xs"
           >
             Cancel
           </Button>
         </div>
-        {error && <p className="w-full text-sm text-red-600">{error}</p>}
+        {error && <p className="w-full text-xs text-red-600 font-medium">{error}</p>}
       </form>
     );
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 transition-colors hover:bg-slate-50">
-      <Link
-        href={`/banks/${bank.id}`}
-        className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900 hover:text-indigo-600"
-      >
-        {bank.name}
-      </Link>
-      <div className="flex shrink-0 items-center gap-3">
-        <span className="text-sm text-slate-400">
-          {bank.questionCount} question{bank.questionCount === 1 ? "" : "s"}
+    <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition-colors hover:bg-slate-50/80">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <Link
+          href={`/banks/${bank.id}`}
+          className="truncate text-sm font-bold text-slate-900 hover:text-indigo-600 transition-colors"
+        >
+          {bank.name}
+        </Link>
+        <span className="text-xs text-slate-400 font-medium">
+          📋 {bank.questionCount} {bank.questionCount === 1 ? "question" : "questions"}
         </span>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
         {confirmingDelete ? (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">Delete bank?</span>
+          <div className="flex items-center gap-1.5 bg-red-50 p-1 rounded-xl border border-red-200">
+            <span className="text-xs font-bold text-red-800 px-1">Delete bank?</span>
             <Button
               type="button"
               variant="secondary"
               size="sm"
               disabled={deleting}
               onClick={() => setConfirmingDelete(false)}
+              className="h-7 text-xs px-2"
             >
               Cancel
             </Button>
@@ -131,34 +136,36 @@ export function BankRow({ bank }: { bank: Bank }) {
               size="sm"
               disabled={deleting}
               onClick={handleDelete}
+              className="h-7 text-xs px-2"
             >
-              {deleting && <Spinner className="h-3.5 w-3.5 text-white" />}
-              {deleting ? "Deleting…" : "Delete"}
+              {deleting && <Spinner className="h-3 w-3 text-white mr-1" />}
+              {deleting ? "Deleting…" : "Confirm"}
             </Button>
           </div>
         ) : (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 text-xs">
             <Link
-              href={`/banks/${bank.id}/upload`}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
-              title="Upload Questions"
+              href={`/banks/${bank.id}`}
+              className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 bg-indigo-50 text-indigo-700 font-bold hover:bg-indigo-100 transition-colors"
+              title="View and manage questions"
             >
-              <UploadIcon className="h-3.5 w-3.5" />
-              Upload
+              Manage
             </Link>
             <button
               type="button"
               onClick={() => setEditing(true)}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
               aria-label="Rename bank"
+              title="Rename bank"
             >
               <PencilIcon className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               onClick={() => setConfirmingDelete(true)}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-slate-400 hover:bg-red-50 hover:text-red-600"
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
               aria-label="Delete bank"
+              title="Delete bank"
             >
               <TrashIcon className="h-3.5 w-3.5" />
             </button>
@@ -166,7 +173,7 @@ export function BankRow({ bank }: { bank: Bank }) {
         )}
       </div>
       {error && !confirmingDelete && (
-        <p className="w-full text-sm text-red-600">{error}</p>
+        <p className="w-full text-xs font-medium text-red-600">{error}</p>
       )}
     </div>
   );

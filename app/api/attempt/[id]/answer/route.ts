@@ -14,27 +14,35 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await params;
-
-  let body: z.infer<typeof answerSchema>;
   try {
-    body = answerSchema.parse(await req.json());
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: err.issues }, { status: 400 });
+    const { id } = await params;
+
+    let body: z.infer<typeof answerSchema>;
+    try {
+      body = answerSchema.parse(await req.json());
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return NextResponse.json({ error: err.issues }, { status: 400 });
+      }
+      throw err;
     }
-    throw err;
+
+    const result = await submitAnswer(id, body.questionId, {
+      chosenOptionIds: body.chosenOptionIds,
+      numericValue: body.numericValue ?? undefined,
+      timeSpentMs: body.timeSpentMs,
+    });
+
+    if (result.status === "section_expired") {
+      return NextResponse.json({ rejected: "SECTION_EXPIRED" }, { status: 409 });
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("[POST /api/attempt/[id]/answer] Error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 },
+    );
   }
-
-  const result = await submitAnswer(id, body.questionId, {
-    chosenOptionIds: body.chosenOptionIds,
-    numericValue: body.numericValue ?? undefined,
-    timeSpentMs: body.timeSpentMs,
-  });
-
-  if (result.status === "section_expired") {
-    return NextResponse.json({ rejected: "SECTION_EXPIRED" }, { status: 409 });
-  }
-
-  return NextResponse.json({ ok: true });
 }

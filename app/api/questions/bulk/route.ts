@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      await db.$transaction(
+      const createdQuestions = await db.$transaction(
         validRows.map((row) =>
           db.question.create({
             data: {
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
               type: row.type,
               stem: row.stem,
               mediaUrl: row.mediaUrl,
-              tags: row.tags,
+              tags: Array.from(new Set([...(row.tags || []), "uploaded"])),
               options: {
                 create: row.options.map((o, i) => ({
                   label: o.label,
@@ -88,11 +88,15 @@ export async function POST(req: NextRequest) {
                 })),
               },
             },
+            select: { id: true },
           }),
         ),
       );
 
-      return NextResponse.json({ created: validRows.length }, { status: 201 });
+      return NextResponse.json(
+        { created: validRows.length, createdIds: createdQuestions.map((q) => q.id) },
+        { status: 201 },
+      );
     }
 
     // 2. FormData Direct File Upload (Fallback / Legacy)
@@ -162,7 +166,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Fix the errors below and re-upload", rowErrors }, { status: 400 });
     }
 
-    await db.$transaction(
+    const createdQuestions = await db.$transaction(
       validRows.map((row) =>
         db.question.create({
           data: {
@@ -170,7 +174,7 @@ export async function POST(req: NextRequest) {
             type: row.type,
             stem: row.stem,
             mediaUrl: row.mediaUrl,
-            tags: row.tags,
+            tags: Array.from(new Set([...(row.tags || []), "uploaded"])),
             options: {
               create: row.options.map((o, i) => ({
                 label: o.label,
@@ -179,14 +183,19 @@ export async function POST(req: NextRequest) {
               })),
             },
           },
+          select: { id: true },
         }),
       ),
     );
 
-    return NextResponse.json({ created: validRows.length }, { status: 201 });
+    return NextResponse.json(
+      { created: validRows.length, createdIds: createdQuestions.map((q) => q.id) },
+      { status: 201 },
+    );
   } catch (err) {
     if (err instanceof ApiAuthError) return err.response;
     console.error("Bulk upload error:", err);
     return NextResponse.json({ error: "Failed to upload questions." }, { status: 500 });
   }
 }
+

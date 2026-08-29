@@ -6,6 +6,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { CheckIcon, ClockIcon, ExternalLinkIcon, InboxIcon, WarningIcon } from "@/components/ui/icons";
 import { MarkInvitationsViewed } from "@/components/candidate/mark-viewed";
 
+const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+
 function statusInfo(status: string, isExpired: boolean) {
   if (isExpired) return { label: "Expired", icon: WarningIcon, className: "text-slate-400" };
   if (status === "SUBMITTED") return { label: "Completed", icon: CheckIcon, className: "text-emerald-600" };
@@ -24,6 +26,7 @@ export default async function CandidateDashboardPage() {
   });
 
   const newInvitationIds = invitations.filter((inv) => inv.viewedAt === null).map((inv) => inv.id);
+  const now = new Date();
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10 sm:px-8">
@@ -48,9 +51,13 @@ export default async function CandidateDashboardPage() {
         )}
         {invitations.map((inv) => {
           const isNew = newInvitationIds.includes(inv.id);
-          const isExpired = inv.status === "EXPIRED" || inv.expiresAt < new Date();
+          const isExpired = inv.status === "EXPIRED" || inv.expiresAt < now;
           const canStart = !isExpired && inv.status !== "SUBMITTED";
           const status = statusInfo(inv.status, isExpired);
+
+          // "Expires soon" if active and expiring within 3 days
+          const msUntilExpiry = inv.expiresAt.getTime() - now.getTime();
+          const isExpiringSoon = !isExpired && inv.status !== "SUBMITTED" && msUntilExpiry > 0 && msUntilExpiry <= THREE_DAYS_MS;
 
           return (
             <div key={inv.id} className="flex items-center justify-between gap-3 px-5 py-4">
@@ -63,12 +70,20 @@ export default async function CandidateDashboardPage() {
                     </span>
                   )}
                 </p>
-                <p className={`mt-0.5 flex items-center gap-1 text-xs ${status.className}`}>
-                  <status.icon className="h-3.5 w-3.5" />
-                  {status.label}
+                <p className={`mt-0.5 flex items-center gap-1.5 flex-wrap text-xs ${status.className}`}>
+                  <span className="flex items-center gap-1">
+                    <status.icon className="h-3.5 w-3.5" />
+                    {status.label}
+                  </span>
                   <span className="text-slate-400">
                     · Expires {inv.expiresAt.toLocaleDateString()}
                   </span>
+                  {isExpiringSoon && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
+                      <WarningIcon className="h-3 w-3" />
+                      Expires soon
+                    </span>
+                  )}
                 </p>
               </div>
               {canStart && (

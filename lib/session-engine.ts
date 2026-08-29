@@ -57,8 +57,19 @@ async function getOrInitSectionState(
   durableSectionState: Record<string, Omit<SectionState, "cursor">>,
 ): Promise<SectionState> {
   const key = redisKey(attemptId, section.order);
-  const cached = await redis.get(key);
-  if (cached) return JSON.parse(cached) as SectionState;
+  let cached: string | null = null;
+  try {
+    cached = await redis.get(key);
+  } catch (err) {
+    console.warn("[session-engine] Redis get failed, using database state:", err);
+  }
+  if (cached) {
+    try {
+      return JSON.parse(cached) as SectionState;
+    } catch {
+      // ignore malformed JSON cache
+    }
+  }
 
   const durable = durableSectionState[String(section.order)];
   if (durable) {
@@ -67,7 +78,9 @@ async function getOrInitSectionState(
       answeredIds.has(id),
     ).length;
     const state: SectionState = { ...durable, cursor };
-    await redis.set(key, JSON.stringify(state));
+    try {
+      await redis.set(key, JSON.stringify(state));
+    } catch {}
     return state;
   }
 
@@ -93,12 +106,16 @@ async function getOrInitSectionState(
       },
     },
   });
-  await redis.set(key, JSON.stringify(state));
+  try {
+    await redis.set(key, JSON.stringify(state));
+  } catch {}
   return state;
 }
 
 async function advanceSection(attemptId: string, fromOrder: number) {
-  await redis.del(redisKey(attemptId, fromOrder));
+  try {
+    await redis.del(redisKey(attemptId, fromOrder));
+  } catch {}
   await db.attempt.update({
     where: { id: attemptId },
     data: { currentSection: { increment: 1 } },
@@ -230,23 +247,35 @@ export async function submitAnswer(
   }
 
   const lock = lockKey(attemptId, questionId);
-  const acquired = await redis.set(lock, "1", "PX", 5000, "NX");
+  let acquired: string | null = null;
+  try {
+    acquired = await redis.set(lock, "1", "PX", 5000, "NX");
+  } catch {
+    acquired = "1";
+  }
   if (!acquired) return { status: "ok" };
 
   try {
-    const fresh = await redis.get(redisKey(attemptId, section.order));
+    let fresh: string | null = null;
+    try {
+      fresh = await redis.get(redisKey(attemptId, section.order));
+    } catch {}
     const freshState: SectionState = fresh
       ? JSON.parse(fresh)
       : { ...state };
     if (freshState.servedQuestionIds[freshState.cursor] === questionId) {
       freshState.cursor += 1;
-      await redis.set(
-        redisKey(attemptId, section.order),
-        JSON.stringify(freshState),
-      );
+      try {
+        await redis.set(
+          redisKey(attemptId, section.order),
+          JSON.stringify(freshState),
+        );
+      } catch {}
     }
   } finally {
-    await redis.del(lock);
+    try {
+      await redis.del(lock);
+    } catch {}
   }
 
   return { status: "ok" };
@@ -257,7 +286,11 @@ export async function logProctoringEvent(
   type: string,
   payload?: unknown,
 ) {
-  await db.proctoringEvent.create({
-    data: { attemptId, type, payload: payload as never },
-  });
+  try {
+    await db.proctoringEvent.create({
+      data: { attemptId, type, payload: payload as never },
+    });
+  } catch (err) {
+    console.error("[logProctoringEvent] Error:", err);
+  }
 }

@@ -38,6 +38,9 @@ yarn-error.log*
 
 # local dev infra (portable Postgres/Redis binaries & data)
 /.devtools/
+dump.rdb
+*.pid
+scratch/
 
 # typescript
 *.tsbuildinfo

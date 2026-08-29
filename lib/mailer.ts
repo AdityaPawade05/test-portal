@@ -5,24 +5,35 @@ const globalForMailer = globalThis as unknown as {
 };
 
 export function isSmtpConfigured(): boolean {
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
-  return Boolean(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS);
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const user = process.env.SMTP_USER || process.env.EMAIL_USER;
+  const pass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
+  return Boolean(user && user.trim() && pass && pass.trim() && host && host.trim());
 }
 
 function getTransport(): nodemailer.Transporter | null {
   if (globalForMailer.mailer) return globalForMailer.mailer;
   if (!isSmtpConfigured()) return null;
 
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = Number(process.env.SMTP_PORT || 465);
+  const user = (process.env.SMTP_USER || process.env.EMAIL_USER || "").trim();
+  const pass = (process.env.SMTP_PASS || process.env.EMAIL_PASS || "").replace(/\s+/g, "");
 
   const transport = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: Number(SMTP_PORT) === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
+    host,
+    port,
+    // Port 465 = SSL/TLS (recommended for Gmail), 587/25 = STARTTLS
+    secure: port === 465,
+    auth: { user, pass },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
+    ...(port === 587 && { requireTLS: true }),
   });
 
-  if (process.env.NODE_ENV !== "production") globalForMailer.mailer = transport;
+  // Cache the transport globally so we don't recreate it on every request
+  globalForMailer.mailer = transport;
   return transport;
 }
 
@@ -34,6 +45,7 @@ export type EmailTemplateParams = {
   customNote?: string | null;
   organizationName?: string | null;
   timeLimitSec?: number | null;
+  candidateName?: string | null;
 };
 
 export function generateEmailHtml({
@@ -44,6 +56,7 @@ export function generateEmailHtml({
   customNote,
   organizationName = "Assessment Portal",
   timeLimitSec,
+  candidateName,
 }: EmailTemplateParams): { subject: string; text: string; html: string } {
   const formattedExpiry = expiresAt.toLocaleDateString(undefined, {
     weekday: "short",
@@ -55,9 +68,16 @@ export function generateEmailHtml({
   const durationStr = timeLimitSec ? `${Math.round(timeLimitSec / 60)} mins` : null;
   const orgTitle = organizationName || "Assessment Portal";
 
-  const subject = `You're invited to take the "${testName}" assessment`;
+  // Personalise first name — use the part before first space
+  const firstName = candidateName?.trim().split(/\s+/)[0] ?? null;
 
-  const text = `Hello,
+  const subject = firstName
+    ? `${firstName}, you're invited to take the "${testName}" assessment`
+    : `You're invited to take the "${testName}" assessment`;
+
+  const greeting = firstName ? `Hi ${firstName},` : "Hello,";
+
+  const text = `${greeting}
 
 You have been invited to complete the "${testName}" assessment by ${orgTitle}.
 
@@ -77,6 +97,11 @@ ${orgTitle}`;
   <title>${escapeHtml(subject)}</title>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
+  <!-- Hidden Pre-header text for Inbox list preview -->
+  <span style="display:none;font-size:1px;color:#f8fafc;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">
+    You are invited to take the ${escapeHtml(testName)} assessment by ${escapeHtml(orgTitle)}.${durationStr ? ` Time limit: ${durationStr}.` : ""}
+  </span>
+
   <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 40px 16px;">
     <tr>
       <td align="center">
@@ -99,7 +124,10 @@ ${orgTitle}`;
                   </td>
                 </tr>
               </table>
-              <h1 style="margin: 20px 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a; line-height: 1.3;">
+              ${firstName
+                ? `<p style="margin: 20px 0 4px 0; font-size: 15px; color: #475569;">Hi <strong style="color: #0f172a;">${escapeHtml(firstName)}</strong>,</p>`
+                : ""}
+              <h1 style="margin: ${firstName ? "0" : "20px"} 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a; line-height: 1.3;">
                 You're invited to take an assessment
               </h1>
               <p style="margin: 0; font-size: 15px; color: #475569; line-height: 1.5;">
@@ -115,7 +143,7 @@ ${orgTitle}`;
           <tr>
             <td style="padding: 0 32px 24px 32px;">
               <div style="background-color: #f1f5f9; border-left: 4px solid #4f46e5; border-radius: 6px; padding: 16px; font-size: 14px; color: #334155; line-height: 1.6;">
-                <strong style="color: #1e293b; display: block; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Note from the evaluator:</strong>
+                <strong style="color: #1e293b; display: block; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Note from host:</strong>
                 "${escapeHtml(customNote)}"
               </div>
             </td>
@@ -124,7 +152,7 @@ ${orgTitle}`;
               : ""
           }
 
-          <!-- Details Pills -->
+          <!-- Details Card -->
           <tr>
             <td style="padding: 0 32px 24px 32px;">
               <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border-radius: 12px; border: 1px solid #f1f5f9; padding: 16px;">
@@ -147,7 +175,7 @@ ${orgTitle}`;
           <!-- Primary CTA Button -->
           <tr>
             <td align="center" style="padding: 0 32px 32px 32px;">
-              <a href="${link}" target="_blank" style="display: inline-block; width: 100%; box-sizing: border-box; background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%); color: #ffffff; text-align: center; padding: 14px 24px; border-radius: 10px; text-decoration: none; font-weight: 600; font-size: 16px; shadow: 0 4px 12px rgba(79, 70, 229, 0.25);">
+              <a href="${link}" target="_blank" style="display: inline-block; width: 100%; box-sizing: border-box; background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%); color: #ffffff; text-align: center; padding: 14px 24px; border-radius: 10px; text-decoration: none; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);">
                 Start Assessment →
               </a>
             </td>
@@ -155,7 +183,7 @@ ${orgTitle}`;
 
           <!-- Fallback Direct Link -->
           <tr>
-            <td style="padding: 0 32px 32px 32px; border-t: 1px solid #f1f5f9; text-align: left;">
+            <td style="padding: 0 32px 32px 32px; border-top: 1px solid #f1f5f9; text-align: left;">
               <p style="margin: 16px 0 6px 0; font-size: 12px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">
                 Or copy and paste this link in your browser:
               </p>
@@ -168,8 +196,8 @@ ${orgTitle}`;
           <!-- Footer -->
           <tr>
             <td style="background-color: #f8fafc; padding: 24px 32px; text-align: center; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8; line-height: 1.5;">
-              <p style="margin: 0 0 4px 0;">This invitation was sent automatically by <strong>${escapeHtml(orgTitle)}</strong>.</p>
-              <p style="margin: 0;">Please do not reply directly to this email.</p>
+              <p style="margin: 0 0 4px 0;">This assessment invitation was sent by <strong>${escapeHtml(orgTitle)}</strong>.</p>
+              <p style="margin: 0;">Please do not reply directly to this automated email.</p>
             </td>
           </tr>
 
@@ -191,29 +219,58 @@ export async function sendInvitationEmail(params: EmailTemplateParams): Promise<
   try {
     const transport = getTransport();
     if (!transport) {
-      console.warn(`[Mailer] SMTP not configured — link generated for manual sharing: ${params.link}`);
+      const user = process.env.SMTP_USER || process.env.EMAIL_USER;
+      const pass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
+      const missing: string[] = [];
+      if (!user?.trim()) missing.push("SMTP_USER / EMAIL_USER");
+      if (!pass?.trim()) missing.push("SMTP_PASS / EMAIL_PASS");
+      const missingList = missing.length ? ` (missing: ${missing.join(", ")})` : "";
+      console.warn(`[Mailer] SMTP not configured${missingList} — link for manual sharing: ${params.link}`);
       return {
         success: false,
-        error: "SMTP not configured in .env (Share candidate link directly)",
+        error: `SMTP not configured${missingList}. Fill in your .env file and restart the server.`,
       };
     }
 
-    const from = process.env.SMTP_FROM || process.env.SMTP_USER!;
+    const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER || process.env.EMAIL_USER || "Assessment Portal <noreply@assessmentportal.com>";
     const { subject, text, html } = generateEmailHtml(params);
 
     await transport.sendMail({
       from,
+      replyTo: process.env.SMTP_USER || from,
       to: params.to,
       subject,
       text,
       html,
+      headers: {
+        "X-Entity-Ref-ID": params.link,
+        "X-Auto-Response-Suppress": "OOF, AutoReply",
+        "Precedence": "bulk",
+      },
     });
 
+    console.info(`[Mailer] Email sent to ${params.to}`);
     return { success: true };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
+    // Invalidate cached transport on auth errors so next request retries with fresh credentials
+    const isAuthError = errorMsg.includes("535") || errorMsg.includes("EAUTH") || errorMsg.toLowerCase().includes("invalid login") || errorMsg.toLowerCase().includes("username and password");
+    const isNetworkError = errorMsg.includes("ECONNREFUSED") || errorMsg.includes("ETIMEDOUT") || errorMsg.includes("ENOTFOUND");
+
+    if (isAuthError || isNetworkError) {
+      // Clear cached transporter so next attempt rebuilds it (useful after .env update)
+      globalForMailer.mailer = undefined;
+    }
+
+    let userFacingError = errorMsg;
+    if (isAuthError) {
+      userFacingError = "Gmail authentication failed. Check that SMTP_USER is your Gmail address and SMTP_PASS is a valid App Password (not your regular Gmail password). App Passwords are generated at myaccount.google.com → Security → 2-Step Verification → App passwords.";
+    } else if (isNetworkError) {
+      userFacingError = "Cannot connect to SMTP server. Check SMTP_HOST and SMTP_PORT in your .env, and ensure your network allows outbound SMTP connections on port 587.";
+    }
+
     console.error(`[Mailer] Failed to send email to ${params.to}:`, errorMsg);
-    return { success: false, error: errorMsg };
+    return { success: false, error: userFacingError };
   }
 }
 
