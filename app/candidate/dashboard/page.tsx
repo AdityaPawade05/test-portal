@@ -95,6 +95,15 @@ export default async function CandidateDashboardPage() {
                   <ExternalLinkIcon className="h-3.5 w-3.5" />
                 </a>
               )}
+              {inv.status === "SUBMITTED" && (
+                <a
+                  href={`/api/take/${inv.token}/certificate`}
+                  download
+                  className={buttonVariants({ variant: "secondary", size: "sm", className: "shrink-0 gap-1.5" })}
+                >
+                  <span>📄</span> Certificate (PDF)
+                </a>
+              )}
             </div>
           );
         })}

@@ -46,6 +46,11 @@ export type EmailTemplateParams = {
   organizationName?: string | null;
   timeLimitSec?: number | null;
   candidateName?: string | null;
+  companyName?: string | null;
+  jobRole?: string | null;
+  ctcPackage?: string | null;
+  labSlot?: string | null;
+  rollNumber?: string | null;
 };
 
 export function generateEmailHtml({
@@ -57,6 +62,11 @@ export function generateEmailHtml({
   organizationName = "Assessment Portal",
   timeLimitSec,
   candidateName,
+  companyName,
+  jobRole,
+  ctcPackage,
+  labSlot,
+  rollNumber,
 }: EmailTemplateParams): { subject: string; text: string; html: string } {
   const formattedExpiry = expiresAt.toLocaleDateString(undefined, {
     weekday: "short",
@@ -71,17 +81,19 @@ export function generateEmailHtml({
   // Personalise first name — use the part before first space
   const firstName = candidateName?.trim().split(/\s+/)[0] ?? null;
 
-  const subject = firstName
-    ? `${firstName}, you're invited to take the "${testName}" assessment`
-    : `You're invited to take the "${testName}" assessment`;
+  const subject = companyName
+    ? `Placement Drive: ${companyName} (${jobRole || "Technical Assessment"}) - ${firstName || "Candidate Invitation"}`
+    : firstName
+      ? `${firstName}, you're invited to take the "${testName}" assessment`
+      : `You're invited to take the "${testName}" assessment`;
 
   const greeting = firstName ? `Hi ${firstName},` : "Hello,";
 
   const text = `${greeting}
 
-You have been invited to complete the "${testName}" assessment by ${orgTitle}.
-
-${customNote ? `Message from host:\n"${customNote}"\n\n` : ""}Start Assessment: ${link}
+You have been invited to complete the "${testName}" assessment for ${companyName ? `${companyName} (${jobRole || "Campus Hiring"})` : orgTitle}.
+${labSlot ? `Assigned Slot: ${labSlot}\n` : ""}${rollNumber ? `PRN/Roll No: ${rollNumber}\n` : ""}
+${customNote ? `Message:\n"${customNote}"\n\n` : ""}Start Assessment: ${link}
 
 This link is unique to you and expires on ${formattedExpiry}.${durationStr ? ` Time limit: ${durationStr}.` : ""}
 
@@ -99,42 +111,70 @@ ${orgTitle}`;
 <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
   <!-- Hidden Pre-header text for Inbox list preview -->
   <span style="display:none;font-size:1px;color:#f8fafc;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">
-    You are invited to take the ${escapeHtml(testName)} assessment by ${escapeHtml(orgTitle)}.${durationStr ? ` Time limit: ${durationStr}.` : ""}
+    You are invited to take the ${escapeHtml(testName)} assessment${companyName ? ` for ${escapeHtml(companyName)}` : ""}.${durationStr ? ` Time limit: ${durationStr}.` : ""}
   </span>
 
   <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 40px 16px;">
     <tr>
       <td align="center">
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 540px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.03); border: 1px solid #e2e8f0;">
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 560px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.03); border: 1px solid #e2e8f0;">
 
           <!-- Top Gradient Accent -->
           <tr>
-            <td style="height: 6px; background: linear-gradient(90deg, #6366f1 0%, #4f46e5 50%, #4338ca 100%);"></td>
+            <td style="height: 6px; background: linear-gradient(90deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);"></td>
           </tr>
 
           <!-- Header -->
           <tr>
-            <td style="padding: 32px 32px 24px 32px; text-align: left;">
+            <td style="padding: 32px 32px 20px 32px; text-align: left;">
               <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
                   <td>
-                    <span style="display: inline-block; background-color: #eef2ff; color: #4f46e5; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 12px; border-radius: 20px;">
-                      ${escapeHtml(orgTitle)}
+                    <span style="display: inline-block; background-color: #eff6ff; color: #2563eb; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 12px; border-radius: 20px;">
+                      🎓 ${escapeHtml(orgTitle)} • Placement Cell
                     </span>
+                    ${
+                      companyName
+                        ? `<span style="display: inline-block; margin-left: 6px; background-color: #fdf4ff; color: #c026d3; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 12px; border-radius: 20px;">
+                      💼 ${escapeHtml(companyName)}
+                    </span>`
+                        : ""
+                    }
                   </td>
                 </tr>
               </table>
+
               ${firstName
-                ? `<p style="margin: 20px 0 4px 0; font-size: 15px; color: #475569;">Hi <strong style="color: #0f172a;">${escapeHtml(firstName)}</strong>,</p>`
+                ? `<p style="margin: 20px 0 4px 0; font-size: 15px; color: #475569;">Hi <strong style="color: #0f172a;">${escapeHtml(firstName)}</strong>${rollNumber ? ` (${escapeHtml(rollNumber)})` : ""},</p>`
                 : ""}
-              <h1 style="margin: ${firstName ? "0" : "20px"} 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a; line-height: 1.3;">
-                You're invited to take an assessment
+              
+              <h1 style="margin: ${firstName ? "4px" : "20px"} 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a; line-height: 1.3;">
+                ${companyName ? `${escapeHtml(companyName)} Campus Recruitment Test` : "Online Assessment Invitation"}
               </h1>
               <p style="margin: 0; font-size: 15px; color: #475569; line-height: 1.5;">
-                You have been selected to complete the <strong style="color: #0f172a;">${escapeHtml(testName)}</strong> test.
+                You have been shortlisted to take the <strong style="color: #0f172a;">${escapeHtml(testName)}</strong>${jobRole ? ` for the position of <strong style="color: #0f172a;">${escapeHtml(jobRole)}</strong>` : ""}${ctcPackage ? ` (Package: <strong>${escapeHtml(ctcPackage)}</strong>)` : ""}.
               </p>
             </td>
           </tr>
+
+          <!-- Slot & Lab Allocation Card if provided -->
+          ${
+            labSlot
+              ? `
+          <tr>
+            <td style="padding: 0 32px 16px 32px;">
+              <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 12px 16px; display: flex; align-items: center;">
+                <span style="font-size: 18px; margin-right: 10px;">📍</span>
+                <div>
+                  <strong style="color: #166534; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; display: block;">Assigned Lab & Slot:</strong>
+                  <span style="color: #15803d; font-size: 15px; font-weight: 600;">${escapeHtml(labSlot)}</span>
+                </div>
+              </div>
+            </td>
+          </tr>
+          `
+              : ""
+          }
 
           ${
             customNote

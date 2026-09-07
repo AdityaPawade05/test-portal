@@ -8,14 +8,17 @@ import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { CheckIcon, ClockIcon, ExpandIcon, WarningIcon } from "@/components/ui/icons";
 import { WebcamProctor } from "@/components/candidate/webcam-proctor";
+import { CodeEditor, type TestCase } from "@/components/candidate/code-editor";
 
 type CandidateOption = { id: string; label: string };
 type CandidateQuestion = {
   id: string;
-  type: "MCQ_SINGLE" | "MCQ_MULTI" | "NUMERIC" | "LIKERT";
+  type: "MCQ_SINGLE" | "MCQ_MULTI" | "NUMERIC" | "LIKERT" | "CODING";
   stem: string;
   mediaUrl: string | null;
+  starterCode?: string | null;
   options: CandidateOption[];
+  testCases?: TestCase[];
 };
 
 type NextResult =
@@ -60,6 +63,10 @@ export default function TakeTestPage() {
   const [remainingMs, setRemainingMs] = useState(0);
   const [chosenOptionIds, setChosenOptionIds] = useState<string[]>([]);
   const [numericValue, setNumericValue] = useState("");
+  const [codeSubmission, setCodeSubmission] = useState("");
+  const [codeLanguage, setCodeLanguage] = useState("javascript");
+  const [testCasesPassed, setTestCasesPassed] = useState(0);
+  const [testCasesTotal, setTestCasesTotal] = useState(0);
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [inFullscreen, setInFullscreen] = useState(true);
@@ -232,10 +239,8 @@ export default function TakeTestPage() {
   const registerViolation = useCallback(
     (reason: string) => {
       if (phaseRef.current !== "in-progress") return;
-
       logEvent("PROCTORING_VIOLATION", { reason });
       setViolationReason(reason);
-
       setViolationsCount((prev) => {
         const nextCount = prev + 1;
         if (nextCount >= MAX_VIOLATIONS) {
@@ -248,6 +253,44 @@ export default function TakeTestPage() {
     },
     [logEvent, triggerAutoSubmit]
   );
+
+  // ── HTTPS Heartbeat Sync with API & Session Engine ────────────────────────
+  useEffect(() => {
+    if (phase !== "in-progress" || !attemptId) return;
+
+    async function sendHeartbeat() {
+      if (!attemptId) return;
+      try {
+        const res = await fetch(`/api/attempt/${attemptId}/heartbeat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fullscreen: document.fullscreenElement != null,
+            tabFocused: document.visibilityState === "visible",
+            webcamActive: webcamVerified,
+            faceDetected: true,
+            currentSection: next?.sectionIndex,
+            questionId: next?.question?.id,
+            timestamp: new Date().toISOString(),
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.shouldAutoSubmit) {
+            triggerAutoSubmit("Section time limit expired");
+          }
+        }
+      } catch (err) {
+        console.warn("[Heartbeat] Sync failed:", err);
+      }
+    }
+
+    const hbInterval = setInterval(sendHeartbeat, 12_000);
+    sendHeartbeat();
+
+    return () => clearInterval(hbInterval);
+  }, [phase, attemptId, webcamVerified, next, triggerAutoSubmit]);
 
   useEffect(() => {
     function handleVisibility() {
@@ -312,10 +355,9 @@ export default function TakeTestPage() {
       document.removeEventListener("dragstart", handleDragStart);
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
-  }, [logEvent, registerViolation]);
+  }, [registerViolation, logEvent]);
 
-  // Don't leave the candidate stranded in full-screen once there's nothing
-  // left for them to do here.
+  // Exit fullscreen cleanly on completion
   useEffect(() => {
     if (
       (phase === "submitted" ||
@@ -357,13 +399,13 @@ export default function TakeTestPage() {
         return;
       }
 
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && next?.question.type !== "CODING") {
         e.preventDefault();
         submitAnswer();
         return;
       }
 
-      if ((e.target as HTMLElement).tagName === "INPUT") return;
+      if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
 
       const option = next!.question.options[Number(e.key) - 1];
       if (!option) return;
@@ -396,6 +438,10 @@ export default function TakeTestPage() {
           questionId: next.question.id,
           chosenOptionIds,
           numericValue: numericValue === "" ? undefined : Number(numericValue),
+          codeSubmission: next.question.type === "CODING" ? codeSubmission : undefined,
+          codeLanguage: next.question.type === "CODING" ? codeLanguage : undefined,
+          testCasesPassed: next.question.type === "CODING" ? testCasesPassed : undefined,
+          testCasesTotal: next.question.type === "CODING" ? testCasesTotal : undefined,
           timeSpentMs,
         }),
       });
@@ -431,86 +477,40 @@ export default function TakeTestPage() {
       </StatusScreen>
     );
   }
-  if (phase === "ready") {
+  if (phase === "error") {
     return (
-      <main className="flex min-h-screen flex-col bg-slate-50">
-        {attemptId && (
-          <WebcamProctor
-            attemptId={attemptId}
-            verified={webcamVerified}
-            onVerified={() => setWebcamVerified(true)}
-            onStartTest={beginTest}
-            onViolation={registerViolation}
-          />
-        )}
-        <StatusScreen>
-          <p className="text-lg font-medium text-slate-900">{testName}</p>
-          <p className="max-w-sm text-sm text-slate-500">
-            {sectionCount} timed section{sectionCount === 1 ? "" : "s"}. Once you start, each
-            section&apos;s clock runs continuously in the background — closing or refreshing this
-            tab does not pause it.
-          </p>
-          <p className="max-w-sm text-xs text-slate-400">
-            This test runs in full-screen. Tab switches, pastes, and full-screen exits are recorded
-            against your attempt.
-          </p>
-          <Button className="mt-2" onClick={beginTest}>
-            Start test
-          </Button>
-        </StatusScreen>
-      </main>
+      <StatusScreen>
+        <IconCircle tone="red">
+          <WarningIcon className="h-6 w-6" />
+        </IconCircle>
+        <p className="text-lg font-medium text-slate-900">{errorMessage || "Something went wrong"}</p>
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Retry
+        </Button>
+      </StatusScreen>
     );
   }
-  if (phase === "already-submitted" || phase === "submitted") {
+  if (phase === "already-submitted") {
     return (
       <StatusScreen>
         <IconCircle tone="emerald">
           <CheckIcon className="h-6 w-6" />
         </IconCircle>
-        <p className="text-lg font-medium text-slate-900">Thank you</p>
-        <p className="text-sm text-slate-500">
-          Your responses for {testName} have been submitted.
-        </p>
-
-        {score && (
-          <div className="mt-4 w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm">
-            <p className="text-xs text-slate-400">
-              Screening-grade, un-normed raw score — not a percentile.
-            </p>
-            <div className="mt-3 flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-700">Raw score</span>
-              <span className="text-lg font-semibold text-slate-900">{score.rawTotal}</span>
-            </div>
-            {score.passed !== null && (
-              <div className="mt-2 flex items-center justify-between">
-                <span className="text-sm font-medium text-slate-700">Result</span>
-                <span
-                  className={cn(
-                    "text-sm font-semibold",
-                    score.passed ? "text-emerald-600" : "text-red-600",
-                  )}
-                >
-                  {score.passed ? "Passed" : "Not passed"}
-                </span>
-              </div>
-            )}
-            {score.sections.length > 0 && (
-              <div className="mt-4 border-t border-slate-200 pt-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                  Section breakdown
-                </p>
-                <ul className="mt-2 space-y-1.5">
-                  {score.sections.map((s) => (
-                    <li key={s.name} className="flex items-center justify-between text-sm">
-                      <span className="text-slate-600">{s.name}</span>
-                      <span className="font-medium text-slate-900">{s.raw}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
+        <p className="text-lg font-medium text-slate-900">Test already completed</p>
+        <p className="text-sm text-slate-500">You submitted this assessment on a previous visit.</p>
+        {score && <ScoreCard score={score} />}
+      </StatusScreen>
+    );
+  }
+  if (phase === "submitted") {
+    return (
+      <StatusScreen>
+        <IconCircle tone="emerald">
+          <CheckIcon className="h-6 w-6" />
+        </IconCircle>
+        <p className="text-lg font-medium text-slate-900">Test submitted</p>
+        <p className="text-sm text-slate-500">Thanks for completing the assessment.</p>
+        {score && <ScoreCard score={score} />}
       </StatusScreen>
     );
   }
@@ -518,74 +518,158 @@ export default function TakeTestPage() {
     return (
       <StatusScreen>
         <Spinner className="h-6 w-6 text-indigo-600" />
-        <p className="text-slate-500">Submitting…</p>
+        <p className="text-slate-500">Submitting your test…</p>
       </StatusScreen>
     );
   }
-  if (phase === "error") {
-    return (
-      <StatusScreen>
-        <IconCircle tone="red">
-          <WarningIcon className="h-6 w-6" />
-        </IconCircle>
-        <p className="text-slate-700">{errorMessage ?? "Something went wrong."}</p>
-      </StatusScreen>
-    );
-  }
-  if (!next) return null;
 
-  const { question } = next;
-  const sectionProgress = ((next.questionIndex + 1) / next.questionCount) * 100;
-  const urgent = remainingMs <= 60_000;
-  const critical = remainingMs <= 20_000;
+  // Ready Phase: System Check & Verification
+  if (phase === "ready") {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 font-bold text-indigo-600">
+              🎓
+            </span>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">{testName}</h1>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                {sectionCount} {sectionCount === 1 ? "Section" : "Sections"} • Proctored Assessment
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 space-y-3 rounded-xl bg-slate-50 p-4 text-xs leading-relaxed text-slate-600">
+            <h3 className="font-bold uppercase tracking-wider text-slate-900">Test & Anti-Cheat Rules:</h3>
+            <ul className="list-disc space-y-1.5 pl-4">
+              <li>You must grant <strong>Webcam permission</strong> for real-time AI proctoring.</li>
+              <li>The test will automatically enter <strong>Full-Screen mode</strong>.</li>
+              <li>Tab switching, window unfocusing, and prohibited items (cellphones, secondary screens) are flagged.</li>
+              <li>Exceeding <strong>{MAX_VIOLATIONS} violations</strong> will auto-submit your test.</li>
+            </ul>
+          </div>
+
+          {/* Verification webcam placeholder / starter */}
+          <div className="mt-6 flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-slate-900 p-4 text-center">
+            <p className="text-xs font-medium text-slate-300 mb-3">
+              Webcam AI Proctoring System Check:
+            </p>
+            {attemptId && (
+              <WebcamProctor
+                attemptId={attemptId}
+                verified={webcamVerified}
+                onVerified={() => setWebcamVerified(true)}
+                onViolation={registerViolation}
+              />
+            )}
+          </div>
+
+          {errorMessage && (
+            <p className="mt-4 rounded-lg bg-red-50 p-3 text-xs font-semibold text-red-700">{errorMessage}</p>
+          )}
+
+          <Button
+            onClick={beginTest}
+            disabled={!webcamVerified}
+            className="mt-6 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 text-sm rounded-xl shadow-md"
+          >
+            {webcamVerified ? "Enter Fullscreen & Begin Assessment →" : "Verify Webcam to Start..."}
+          </Button>
+        </div>
+      </main>
+    );
+  }
+
+  // Active in-progress phase
+  if (!next) return null;
+  const question = next.question;
+  const sectionProgress = Math.round(((next.questionIndex + 1) / next.questionCount) * 100);
 
   return (
     <main className="flex min-h-screen flex-col bg-slate-50">
+      {/* Dynamic Floating Webcam PiP HUD */}
       {attemptId && (
         <WebcamProctor
           attemptId={attemptId}
-          verified={webcamVerified}
-          onVerified={() => setWebcamVerified(true)}
+          verified={true}
           onViolation={registerViolation}
         />
       )}
+
+      {/* Fullscreen Enforcer Impassable Barrier Overlay */}
       {!inFullscreen && (
-        <div className="border-b border-amber-200 bg-amber-50 px-6 py-2">
-          <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
-            <p className="flex items-center gap-2 text-sm text-amber-800">
-              <ExpandIcon className="h-4 w-4 shrink-0" />
-              You&apos;ve exited full-screen. This has been recorded against your attempt.
-            </p>
-            <Button size="sm" variant="secondary" onClick={reenterFullscreen}>
-              Re-enter full-screen
-            </Button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 backdrop-blur-md p-6 text-center animate-in fade-in duration-200">
+          <div className="max-w-md w-full bg-slate-900 border border-rose-500/40 rounded-3xl p-8 shadow-2xl space-y-6 text-white">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-rose-500/20 text-rose-400 text-3xl border border-rose-500/30 animate-pulse">
+              🔒
+            </div>
+
+            <div>
+              <div className="inline-block px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 text-xs font-bold uppercase tracking-wider mb-2 border border-rose-500/30">
+                Fullscreen Enforcer Active
+              </div>
+              <h2 className="text-xl font-black tracking-tight text-white">
+                Full-Screen Mode Required
+              </h2>
+              <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                You have exited full-screen mode. The assessment interface is locked and all questions are hidden until you return to full-screen mode.
+              </p>
+            </div>
+
+            <div className="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800 text-xs text-slate-400 font-mono text-left">
+              <span className="text-amber-400 font-bold block mb-1">⚠️ Proctoring Notice:</span>
+              Exiting full-screen triggers a security infraction log. Multiple infractions will cause automatic submission.
+            </div>
+
+            <button
+              onClick={reenterFullscreen}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 text-xs rounded-xl shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <ExpandIcon className="h-4 w-4" />
+              <span>Okay, Re-enter Full-Screen Mode</span>
+            </button>
           </div>
         </div>
       )}
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-2xl items-center justify-between px-6 py-4">
-          <div>
-            <p className="text-sm font-semibold text-slate-900">{testName}</p>
-            <p className="text-xs text-slate-500">
-              {next.sectionName} · Question {next.questionIndex + 1} of {next.questionCount} · Section{" "}
-              {next.sectionIndex + 1} of {next.sectionCount}
-            </p>
+
+      {/* Header Bar */}
+      <header className="border-b border-slate-200 bg-white shadow-xs sticky top-0 z-20">
+        <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-3.5">
+          <div className="flex items-center gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-xs font-bold text-white">
+              🎓
+            </span>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 leading-tight">{testName}</h2>
+              <span className="text-[11px] font-semibold text-indigo-600">
+                Section {next.sectionIndex + 1}: {next.sectionName}
+              </span>
+            </div>
           </div>
-          <div
-            className={cn(
-              "rounded-lg px-3 py-1.5 font-mono text-sm font-medium tabular-nums transition-colors",
-              critical
-                ? "bg-red-50 text-red-700"
-                : urgent
-                  ? "bg-amber-50 text-amber-700"
-                  : "bg-slate-100 text-slate-700",
-            )}
-          >
-            {formatClock(remainingMs)}
+
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700">
+              <span>Question {next.questionIndex + 1} of {next.questionCount}</span>
+            </div>
+
+            <div
+              className={cn(
+                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-mono font-bold shadow-xs",
+                remainingMs < 60000
+                  ? "bg-rose-50 text-rose-700 border border-rose-200 animate-pulse"
+                  : "bg-indigo-50 text-indigo-700 border border-indigo-100",
+              )}
+            >
+              <ClockIcon className="h-4 w-4" />
+              <span>{formatClock(remainingMs)}</span>
+            </div>
           </div>
         </div>
+
+        {/* Progress Bars */}
         {next.sectionCount > 1 && (
-          <div className="mx-auto flex max-w-2xl items-center gap-1.5 px-6 pb-3">
+          <div className="mx-auto flex max-w-4xl gap-1.5 px-6 pt-1 pb-2">
             {Array.from({ length: next.sectionCount }).map((_, i) => (
               <span
                 key={i}
@@ -609,9 +693,18 @@ export default function TakeTestPage() {
         </div>
       </header>
 
-      <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-10">
+      <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center px-6 py-8">
         <div key={question.id} className="animate-fade-in select-none rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-          <p className="text-lg leading-relaxed text-slate-900">{question.stem}</p>
+          <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              {question.type === "CODING" ? "💻 Coding Challenge" : question.type}
+            </span>
+            <span className="text-xs font-semibold text-slate-500">
+              Question {next.questionIndex + 1} of {next.questionCount}
+            </span>
+          </div>
+
+          <p className="text-base leading-relaxed text-slate-900 font-medium whitespace-pre-wrap">{question.stem}</p>
           {question.mediaUrl && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -621,6 +714,7 @@ export default function TakeTestPage() {
             />
           )}
 
+          {/* Question Interaction Area */}
           <div className="mt-6 flex flex-col gap-2.5">
             {question.type === "MCQ_SINGLE" &&
               question.options.map((o) => (
@@ -655,9 +749,25 @@ export default function TakeTestPage() {
                 type="number"
                 value={numericValue}
                 onChange={(e) => setNumericValue(e.target.value)}
-                className="w-48 rounded-lg border border-slate-300 px-4 py-2.5 text-base shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-500/10"
+                className="w-48 rounded-lg border border-slate-300 px-4 py-2.5 text-base shadow-sm focus:border-indigo-500 focus:outline-hidden focus:ring-4 focus:ring-indigo-500/10"
                 autoFocus
               />
+            )}
+
+            {question.type === "CODING" && (
+              <div className="mt-2">
+                <CodeEditor
+                  questionId={question.id}
+                  starterCode={question.starterCode}
+                  testCases={question.testCases}
+                  onCodeChange={(code, lang, passed, total) => {
+                    setCodeSubmission(code);
+                    setCodeLanguage(lang);
+                    setTestCasesPassed(passed);
+                    setTestCasesTotal(total);
+                  }}
+                />
+              </div>
             )}
           </div>
 
@@ -665,24 +775,28 @@ export default function TakeTestPage() {
             <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>
           )}
 
-          <div className="mt-8 flex items-center gap-4">
-            <Button onClick={submitAnswer} disabled={submittingAnswer}>
-              {submittingAnswer && <Spinner className="h-4 w-4 text-white" />}
-              {submittingAnswer ? "Saving…" : "Next"}
-            </Button>
-            {question.type !== "NUMERIC" && (
+          <div className="mt-8 flex items-center justify-between pt-4 border-t border-slate-100">
+            {question.type !== "NUMERIC" && question.type !== "CODING" ? (
               <p className="text-xs text-slate-400">
                 Press 1–{question.options.length} to select · Enter to continue
               </p>
-            )}
+            ) : <div />}
+            <Button
+              onClick={submitAnswer}
+              disabled={submittingAnswer}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-sm"
+            >
+              {submittingAnswer && <Spinner className="h-4 w-4 text-white mr-2" />}
+              {submittingAnswer ? "Saving…" : "Submit & Continue →"}
+            </Button>
           </div>
         </div>
       </div>
 
       {showViolationModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-100 text-rose-600 text-xl font-bold">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl text-center border border-rose-100">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-100 text-rose-600 text-2xl font-bold shadow-inner">
               ⚠️
             </div>
             <h3 className="mt-3 text-lg font-bold text-slate-900">
@@ -691,20 +805,21 @@ export default function TakeTestPage() {
             <p className="mt-2 text-sm text-slate-600">
               An action violating test integrity rules was detected:
             </p>
-            <p className="mt-1 rounded-lg bg-amber-50 p-2.5 text-xs font-semibold text-amber-900">
+            <p className="mt-1 rounded-xl bg-amber-50 border border-amber-200 p-2.5 text-xs font-semibold text-amber-900 shadow-xs">
               &quot;{violationReason}&quot;
             </p>
             <p className="mt-3 text-xs text-slate-500 leading-relaxed">
               Exceeding <span className="font-bold text-rose-600">{MAX_VIOLATIONS} violations</span> will result in the immediate automatic submission of your assessment attempt.
             </p>
             <Button
-              className="mt-5 w-full bg-rose-600 hover:bg-rose-700 text-white font-medium"
+              className="mt-5 w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
               onClick={() => {
                 setShowViolationModal(false);
                 reenterFullscreen();
               }}
             >
-              I Understand & Resume Test →
+              <span>✓</span>
+              <span>Okay, I Understand</span>
             </Button>
           </div>
         </div>
@@ -777,5 +892,47 @@ function IconCircle({
     <span className={cn("flex h-12 w-12 items-center justify-center rounded-full", tones[tone])}>
       {children}
     </span>
+  );
+}
+
+function ScoreCard({ score }: { score: CandidateScore }) {
+  return (
+    <div className="mt-4 w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm">
+      <p className="text-xs text-slate-400">
+        Assessment score summary:
+      </p>
+      <div className="mt-3 flex items-center justify-between">
+        <span className="text-sm font-medium text-slate-700">Raw Total Score</span>
+        <span className="text-lg font-bold text-slate-900">{score.rawTotal}</span>
+      </div>
+      {score.passed !== null && (
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-sm font-medium text-slate-700">Result</span>
+          <span
+            className={cn(
+              "text-sm font-semibold",
+              score.passed ? "text-emerald-600" : "text-red-600",
+            )}
+          >
+            {score.passed ? "Passed" : "Not passed"}
+          </span>
+        </div>
+      )}
+      {score.sections && score.sections.length > 0 && (
+        <div className="mt-4 border-t border-slate-200 pt-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Section Breakdown
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {score.sections.map((s) => (
+              <li key={s.name} className="flex items-center justify-between text-sm">
+                <span className="text-slate-600">{s.name}</span>
+                <span className="font-medium text-slate-900">{s.raw}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }

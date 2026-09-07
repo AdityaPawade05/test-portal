@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Variant = "primary" | "secondary" | "outline" | "ghost" | "danger";
 type Size = "sm" | "md";
 
 const base =
@@ -10,6 +10,8 @@ const variants: Record<Variant, string> = {
   primary:
     "bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 active:bg-indigo-700",
   secondary:
+    "bg-white text-slate-700 border border-slate-300 shadow-sm hover:bg-slate-50 active:bg-slate-100",
+  outline:
     "bg-white text-slate-700 border border-slate-300 shadow-sm hover:bg-slate-50 active:bg-slate-100",
   ghost: "text-slate-600 hover:bg-slate-100 active:bg-slate-200",
   danger: "bg-red-600 text-white shadow-sm hover:bg-red-500 active:bg-red-700",

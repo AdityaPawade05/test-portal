@@ -52,6 +52,7 @@ export default async function TestResultsPage({
               <th className="px-5 py-3">Section breakdown</th>
               <th className="px-5 py-3">Passed</th>
               <th className="px-5 py-3">Tab blurs</th>
+              <th className="px-5 py-3 text-right">Report</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -93,12 +94,26 @@ export default async function TestResultsPage({
                     )}
                   </td>
                   <td className="px-5 py-3 text-slate-700">{tabBlurs}</td>
+                  <td className="px-5 py-3 text-right">
+                    {inv.attempt?.score ? (
+                      <a
+                        href={`/api/attempt/${inv.attempt.id}/certificate`}
+                        download
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors border border-indigo-200"
+                        title="Download Candidate PDF Scorecard & Certificate"
+                      >
+                        <span>📄</span> PDF
+                      </a>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
             {test.invitations.length === 0 && (
               <tr>
-                <td colSpan={7}>
+                <td colSpan={8}>
                   <div className="flex flex-col items-center gap-2 px-5 py-10 text-center">
                     <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                       <InboxIcon className="h-5 w-5" />

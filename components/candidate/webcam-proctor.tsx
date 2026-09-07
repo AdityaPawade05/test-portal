@@ -110,6 +110,21 @@ export function WebcamProctor({
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
 
+  // Warning acknowledgment state
+  const [dismissedWarnings, setDismissedWarnings] = useState<Record<string, number>>({});
+
+  const dismissWarning = useCallback((key: string) => {
+    setDismissedWarnings((prev) => ({
+      ...prev,
+      [key]: Date.now() + 12_000,
+    }));
+  }, []);
+
+  const isDismissed = (key: string) => {
+    const expiresAt = dismissedWarnings[key];
+    return Boolean(expiresAt && Date.now() < expiresAt);
+  };
+
   // ── Event logging with cooldown ──────────────────────────────────────────
 
   const logEvent = useCallback(
@@ -136,6 +151,34 @@ export function WebcamProctor({
       }
     },
     [attemptId, onViolation]
+  );
+
+  // ── Snapshot Capture & Upload Engine ──────────────────────────────────────
+
+  const captureAndUploadSnapshot = useCallback(
+    async (reason: string = "PERIODIC_SNAPSHOT", metadata?: Record<string, unknown>) => {
+      if (!videoRef.current || !snapshotCanvasRef.current) return;
+      try {
+        const canvas = snapshotCanvasRef.current;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(videoRef.current, 0, 0, 320, 240);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+
+        await fetch(`/api/attempt/${attemptId}/snapshot`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image: dataUrl,
+            reason,
+            metadata,
+          }),
+        });
+      } catch (err) {
+        console.warn("[WebcamProctor] Snapshot upload error:", err);
+      }
+    },
+    [attemptId]
   );
 
   // ── Video Stream Binding ──────────────────────────────────────────────────
@@ -218,6 +261,9 @@ export function WebcamProctor({
             },
             "Mobile phone or unauthorized device detected"
           );
+          captureAndUploadSnapshot("OBJECT_PHONE_DETECTED", {
+            objects: result.prohibitedObjects.filter((o) => o.category === "PHONE"),
+          });
         }
       } else {
         phoneConsecutiveRef.current = 0;
@@ -234,6 +280,9 @@ export function WebcamProctor({
             },
             "Study material, book, or notes detected"
           );
+          captureAndUploadSnapshot("PROHIBITED_BOOK_DETECTED", {
+            objects: result.prohibitedObjects.filter((o) => o.category === "BOOK_NOTES"),
+          });
         }
       } else {
         bookConsecutiveRef.current = 0;
@@ -250,6 +299,9 @@ export function WebcamProctor({
             },
             "Secondary screen or external display detected"
           );
+          captureAndUploadSnapshot("PROHIBITED_SCREEN_DETECTED", {
+            objects: result.prohibitedObjects.filter((o) => o.category === "SECONDARY_SCREEN"),
+          });
         }
       } else {
         screenConsecutiveRef.current = 0;
@@ -266,18 +318,28 @@ export function WebcamProctor({
             },
             "Headphones or audio device detected"
           );
+          captureAndUploadSnapshot("PROHIBITED_AUDIO_DEVICE_DETECTED", {
+            objects: result.prohibitedObjects.filter((o) => o.category === "AUDIO_DEVICE"),
+          });
         }
       } else {
         audioConsecutiveRef.current = 0;
       }
 
-      // 5. Multiple Faces / Unauthorized Person
+      // 5. Multiple Faces & Unauthorized Person / Body Detection
       if (result.multiplePeopleDetected || result.faceCount > 1 || result.facePose === "MULTIPLE_FACES") {
         logEvent(
-          "MULTIPLE_FACES_DETECTED",
-          { faceCount: result.faceCount },
-          "Multiple people detected in webcam feed"
+          "UNAUTHORIZED_PERSON_DETECTED",
+          {
+            faceCount: result.faceCount,
+            objects: result.prohibitedObjects.filter((o) => o.category === "MULTIPLE_PEOPLE"),
+          },
+          "Multiple people / unauthorized person detected in webcam frame"
         );
+        captureAndUploadSnapshot("UNAUTHORIZED_PERSON_DETECTED", {
+          faceCount: result.faceCount,
+          objects: result.prohibitedObjects.filter((o) => o.category === "MULTIPLE_PEOPLE"),
+        });
       }
 
       // 6. Other Prohibited Objects
@@ -291,6 +353,9 @@ export function WebcamProctor({
             },
             "Prohibited electronic object detected"
           );
+          captureAndUploadSnapshot("PROHIBITED_OBJECT_DETECTED", {
+            objects: result.prohibitedObjects.filter((o) => o.category === "SUSPICIOUS_OBJECT"),
+          });
         }
       } else {
         otherObjConsecutiveRef.current = 0;
@@ -520,20 +585,16 @@ export function WebcamProctor({
     };
   }, [streamActive, runAiVisionScan, analyzeMic]);
 
-  // Periodic Blind Snapshot
+  // Periodic Snapshot Engine
   useEffect(() => {
     if (!streamActive || !verified) return;
 
     const snapshotInterval = setInterval(() => {
-      if (videoRef.current && snapshotCanvasRef.current) {
-        const ctx = snapshotCanvasRef.current.getContext("2d");
-        if (ctx) ctx.drawImage(videoRef.current, 0, 0, 320, 240);
-      }
-      logEvent("WEBCAM_SNAPSHOT", { timestamp: new Date().toISOString() });
+      captureAndUploadSnapshot("PERIODIC_SNAPSHOT", { timestamp: new Date().toISOString() });
     }, SNAPSHOT_INTERVAL_MS);
 
     return () => clearInterval(snapshotInterval);
-  }, [streamActive, verified, logEvent]);
+  }, [streamActive, verified, captureAndUploadSnapshot]);
 
   // Computed state for any active prohibited object
   const anyProhibitedObject =
@@ -861,66 +922,147 @@ export function WebcamProctor({
           </div>
 
           {/* Real-time AI Multi-Object & Proctoring Violation Warning Toasts */}
-          {phoneDetected && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-rose-950/90 border border-rose-500/60 px-3 py-1.5 text-[10px] font-bold text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping" />
-              📱 Mobile phone detected in camera feed!
+          {phoneDetected && !isDismissed("phone") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-rose-950/90 border border-rose-500/60 px-2.5 py-1.5 text-[10px] font-bold text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping shrink-0" />
+                <span>📱 Mobile phone detected in camera feed!</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("phone")}
+                className="rounded bg-rose-700/90 hover:bg-rose-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {bookDetected && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-amber-950/90 border border-amber-500/60 px-3 py-1.5 text-[10px] font-bold text-amber-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
-              📚 Notes, book, or paper study material detected!
+          {bookDetected && !isDismissed("book") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-amber-950/90 border border-amber-500/60 px-2.5 py-1.5 text-[10px] font-bold text-amber-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping shrink-0" />
+                <span>📚 Notes, book, or paper study material detected!</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("book")}
+                className="rounded bg-amber-700/90 hover:bg-amber-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {screenDetected && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-rose-950/90 border border-rose-500/60 px-3 py-1.5 text-[10px] font-bold text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping" />
-              💻 Secondary screen or laptop detected!
+          {screenDetected && !isDismissed("screen") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-rose-950/90 border border-rose-500/60 px-2.5 py-1.5 text-[10px] font-bold text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping shrink-0" />
+                <span>💻 Secondary screen or laptop detected!</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("screen")}
+                className="rounded bg-rose-700/90 hover:bg-rose-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {audioDeviceDetected && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-purple-950/90 border border-purple-500/60 px-3 py-1.5 text-[10px] font-bold text-purple-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-2 w-2 rounded-full bg-purple-500 animate-ping" />
-              🎧 Headphones or audio device detected!
+          {audioDeviceDetected && !isDismissed("audio") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-purple-950/90 border border-purple-500/60 px-2.5 py-1.5 text-[10px] font-bold text-purple-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-purple-500 animate-ping shrink-0" />
+                <span>🎧 Headphones or audio device detected!</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("audio")}
+                className="rounded bg-purple-700/90 hover:bg-purple-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {otherObjectDetected && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-orange-950/90 border border-orange-500/60 px-3 py-1.5 text-[10px] font-bold text-orange-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-2 w-2 rounded-full bg-orange-500 animate-ping" />
-              ⚠️ Prohibited electronic object detected!
+          {otherObjectDetected && !isDismissed("other") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-orange-950/90 border border-orange-500/60 px-2.5 py-1.5 text-[10px] font-bold text-orange-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-orange-500 animate-ping shrink-0" />
+                <span>⚠️ Prohibited electronic object detected!</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("other")}
+                className="rounded bg-orange-700/90 hover:bg-orange-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {(facePose === "LOOKING_LEFT" || facePose === "LOOKING_RIGHT" || facePose === "LOOKING_DOWN") && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-amber-950/90 border border-amber-500/60 px-3 py-1.5 text-[10px] font-medium text-amber-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-              👀 Please look directly at the screen
+          {(facePose === "LOOKING_LEFT" || facePose === "LOOKING_RIGHT" || facePose === "LOOKING_DOWN") && !isDismissed("gaze") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-amber-950/90 border border-amber-500/60 px-2.5 py-1.5 text-[10px] font-medium text-amber-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                <span>👀 Please look directly at the screen</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("gaze")}
+                className="rounded bg-amber-700/90 hover:bg-amber-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {multiplePeopleDetected && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-rose-950/90 border border-rose-500/60 px-3 py-1.5 text-[10px] font-bold text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping" />
-              👥 Multiple people detected in camera!
+          {multiplePeopleDetected && !isDismissed("people") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-rose-950/90 border border-rose-500/60 px-2.5 py-1.5 text-[10px] font-bold text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping shrink-0" />
+                <span>👥 Multiple people detected in camera!</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("people")}
+                className="rounded bg-rose-700/90 hover:bg-rose-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {facePose === "OUT_OF_FRAME" && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-rose-950/90 border border-rose-500/60 px-3 py-1.5 text-[10px] font-medium text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />
-              👤 Face not detected — adjust your camera
+          {facePose === "OUT_OF_FRAME" && !isDismissed("out_of_frame") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-rose-950/90 border border-rose-500/60 px-2.5 py-1.5 text-[10px] font-medium text-rose-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
+                <span>👤 Face not detected — adjust your camera</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("out_of_frame")}
+                className="rounded bg-rose-700/90 hover:bg-rose-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
 
-          {micWarning && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-purple-950/90 border border-purple-500/60 px-3 py-1 text-[10px] text-purple-200 backdrop-blur-sm shadow-xl animate-fade-in">
-              <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />
-              🔊 Loud audio detected on microphone
+          {micWarning && !isDismissed("mic") && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-purple-950/90 border border-purple-500/60 px-2.5 py-1 text-[10px] text-purple-200 backdrop-blur-sm shadow-xl animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse shrink-0" />
+                <span>🔊 Loud audio detected on microphone</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissWarning("mic")}
+                className="rounded bg-purple-700/90 hover:bg-purple-600 text-white font-bold px-2 py-0.5 text-[9px] shadow-xs cursor-pointer transition-all shrink-0"
+              >
+                Okay
+              </button>
             </div>
           )}
         </div>

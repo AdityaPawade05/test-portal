@@ -522,53 +522,89 @@ export async function analyzeVideoFrame(
         let isProhibited = false;
         let category: ProhibitedCategory = "SUSPICIOUS_OBJECT";
 
-        // 1. Phone / Smart Device
-        if (label === "cell phone" || label === "remote" || label === "tablet" || label === "smart watch") {
+        // 1. Phone / Smart Mobile Device
+        if (
+          label === "cell phone" ||
+          label === "remote" ||
+          label === "tablet" ||
+          label === "smart watch" ||
+          label === "phone"
+        ) {
           isProhibited = true;
           category = "PHONE";
-          if (pred.score > 0.42) {
+          if (pred.score > 0.40) {
             phoneDetected = true;
             phoneConfidence = Math.max(phoneConfidence, pred.score);
           }
         }
-        // 2. Books / Notes / Papers
-        else if (label === "book" || label === "notebook" || label === "paper") {
+        // 2. Books / Notes / Papers / Documents
+        else if (
+          label === "book" ||
+          label === "notebook" ||
+          label === "paper" ||
+          label === "binder" ||
+          label === "magazine"
+        ) {
           isProhibited = true;
           category = "BOOK_NOTES";
-          if (pred.score > 0.45) {
+          if (pred.score > 0.42) {
             bookDetected = true;
           }
         }
-        // 3. Secondary Screens / Laptops / Displays
-        else if (label === "laptop" || label === "tv" || label === "monitor" || label === "screen") {
+        // 3. Secondary Screens / Laptops / External Displays
+        else if (
+          label === "laptop" ||
+          label === "tv" ||
+          label === "monitor" ||
+          label === "screen" ||
+          label === "display"
+        ) {
           isProhibited = true;
           category = "SECONDARY_SCREEN";
-          if (pred.score > 0.45) {
+          if (pred.score > 0.42) {
             screenDetected = true;
           }
         }
-        // 4. Audio Devices / Headphones
-        else if (label === "headphones" || label === "earphones" || label === "headset") {
+        // 4. Audio Devices / Headphones / Earphones
+        else if (
+          label === "headphones" ||
+          label === "earphones" ||
+          label === "headset" ||
+          label === "earbuds"
+        ) {
           isProhibited = true;
           category = "AUDIO_DEVICE";
-          if (pred.score > 0.45) {
+          if (pred.score > 0.42) {
             audioDeviceDetected = true;
           }
         }
-        // 5. Multiple Persons in Frame
+        // 5. Persons & Secondary Body Detection
         else if (label === "person") {
           personCount++;
-          if (personCount > 1 && pred.score > 0.5) {
+          // First person centered in frame is candidate; secondary person or body in periphery is unauthorized
+          const isSecondaryBody =
+            personCount > 1 ||
+            (faceRes.faceBbox &&
+              Math.abs(normBbox[0] + normBbox[2] / 2 - (faceRes.faceBbox[0] + faceRes.faceBbox[2] / 2)) >
+                width * 0.28);
+
+          if (isSecondaryBody && pred.score > 0.45) {
             multiplePeopleDetected = true;
             isProhibited = true;
             category = "MULTIPLE_PEOPLE";
           }
         }
-        // 6. Other Suspicious Hardware
-        else if (label === "mouse" || label === "keyboard" || label === "calculator" || label === "camera") {
+        // 6. Other Suspicious Hardware (e.g. external input, calculator, camera)
+        else if (
+          label === "mouse" ||
+          label === "keyboard" ||
+          label === "calculator" ||
+          label === "camera" ||
+          label === "usb"
+        ) {
           isProhibited = true;
           category = "SUSPICIOUS_OBJECT";
-          if (pred.score > 0.5) {
+          if (pred.score > 0.48) {
             otherObjectDetected = true;
           }
         }
@@ -582,7 +618,7 @@ export async function analyzeVideoFrame(
         };
 
         detectedObjects.push(objItem);
-        if (isProhibited && pred.score > 0.42) {
+        if (isProhibited && pred.score > 0.40) {
           prohibitedObjects.push(objItem);
         }
       }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronLeftIcon } from "@/components/ui/icons";
+import { ExportDropdown } from "@/components/admin/export-dropdown";
 
 export function TestResultsNav({
   testId,
@@ -35,6 +36,9 @@ export function TestResultsNav({
           <p className="mt-0.5 text-xs text-slate-500">
             Screening-grade evaluation & behavioral integrity metrics
           </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <ExportDropdown testId={testId} testName={testName} size="sm" />
         </div>
       </div>
 

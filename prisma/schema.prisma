@@ -19,12 +19,13 @@ datasource db {
 // ─────────────────────────────────────────────────────────────
 
 model Organization {
-  id        String         @id @default(cuid())
+  id        String           @id @default(cuid())
   name      String
   users     User[]
   banks     QuestionBank[]
   tests     Test[]
-  createdAt DateTime       @default(now())
+  drives    PlacementDrive[]
+  createdAt DateTime         @default(now())
 }
 
 model User {
@@ -58,19 +59,21 @@ model QuestionBank {
 }
 
 model Question {
-  id         String       @id @default(cuid())
-  bankId     String
-  bank       QuestionBank @relation(fields: [bankId], references: [id])
-  type       QType
-  stem       String // markdown supported
-  mediaUrl   String? // pre-rendered chart/image
-  options    Option[]
-  responses  Response[]
+  id          String       @id @default(cuid())
+  bankId      String
+  bank        QuestionBank @relation(fields: [bankId], references: [id])
+  type        QType
+  stem        String // markdown supported
+  mediaUrl    String? // pre-rendered chart/image
+  starterCode String? // template code for CODING questions
+  options     Option[]
+  testCases   TestCase[]
+  responses   Response[]
   // correctOptionIds is server-only; never serialize to candidate
-  difficulty Float        @default(0.5) // provisional until calibrated
-  tags       String[]
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @default(now()) @updatedAt
+  difficulty  Float        @default(0.5) // provisional until calibrated
+  tags        String[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @default(now()) @updatedAt
 
   @@index([bankId])
 }
@@ -80,6 +83,7 @@ enum QType {
   MCQ_MULTI
   NUMERIC
   LIKERT
+  CODING
 }
 
 model Option {
@@ -93,18 +97,31 @@ model Option {
   @@unique([questionId, order])
 }
 
+model TestCase {
+  id          String   @id @default(cuid())
+  questionId  String
+  question    Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  input       String
+  expectedOut String
+  isHidden    Boolean  @default(false)
+  order       Int      @default(0)
+
+  @@index([questionId])
+}
+
 model Test {
-  id             String       @id @default(cuid())
+  id             String          @id @default(cuid())
   name           String
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  organization   Organization    @relation(fields: [organizationId], references: [id])
   sections       Section[]
   invitations    Invitation[]
-  published      Boolean      @default(false)
+  drive          PlacementDrive?
+  published      Boolean         @default(false)
   // 0-100 raw-percentage pass threshold; null = no pass/fail determination (spec section 6)
   cutoffPercent  Float?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @default(now()) @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @default(now()) @updatedAt
 
   @@index([organizationId])
 }
@@ -128,20 +145,79 @@ enum Pool {
   RANDOM_POOL
 }
 
+model PlacementDrive {
+  id                 String           @id @default(cuid())
+  organizationId     String
+  organization       Organization     @relation(fields: [organizationId], references: [id])
+  companyName        String
+  companyLogoUrl     String?
+  jobRole            String
+  ctcPackage         String?          // e.g. "14 LPA"
+  driveDate          DateTime
+  status             DriveStatus      @default(SCHEDULED)
+  eligibilityMinCgpa Float?
+  eligibleBranches   String[]         // e.g. ["CSE", "IT", "ECE"]
+  accessPasscode     String?          // Recruiter access passkey
+  testId             String?          @unique
+  test               Test?            @relation(fields: [testId], references: [id])
+  candidates         DriveCandidate[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @default(now()) @updatedAt
+
+  @@index([organizationId])
+}
+
+enum DriveStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  COMPLETED
+}
+
+enum ShortlistDecision {
+  PENDING
+  SHORTLISTED
+  WAITLISTED
+  REJECTED
+}
+
+model DriveCandidate {
+  id                String            @id @default(cuid())
+  driveId           String
+  drive             PlacementDrive    @relation(fields: [driveId], references: [id], onDelete: Cascade)
+  invitationId      String?           @unique
+  invitation        Invitation?       @relation(fields: [invitationId], references: [id])
+  name              String
+  email             String
+  rollNumber        String            // PRN / USN / Roll No
+  branch            String
+  cgpa              Float?
+  passingYear       Int?
+  labSlot           String?           // e.g. "Lab 1 - 09:00 AM"
+  shortlistDecision ShortlistDecision @default(PENDING)
+  recruiterNotes    String?
+  createdAt         DateTime          @default(now())
+
+  @@index([driveId])
+  @@index([email])
+  @@index([rollNumber])
+}
+
 model Invitation {
-  id            String       @id @default(cuid())
-  testId        String
+  id             String          @id @default(cuid())
+  testId         String
   // Restrict: a test with existing invitations can't be deleted (see /api/tests/[id] DELETE guard)
-  test          Test         @relation(fields: [testId], references: [id], onDelete: Restrict)
-  email         String
-  candidateName String?      // optional — used to personalise the invitation email greeting
-  token         String       @unique // used in the magic link
-  status        InviteStatus @default(SENT)
-  expiresAt     DateTime
-  attempt       Attempt?
-  createdAt     DateTime     @default(now())
+  test           Test            @relation(fields: [testId], references: [id], onDelete: Restrict)
+  email          String
+  candidateName  String?         // optional — used to personalise the invitation email greeting
+  token          String          @unique // used in the magic link
+  status         InviteStatus    @default(SENT)
+  expiresAt      DateTime
+  attempt        Attempt?
+  driveCandidate DriveCandidate?
+  createdAt      DateTime        @default(now())
   // Null until the candidate opens their dashboard — drives the "new invitation" notification badge.
-  viewedAt      DateTime?
+  viewedAt       DateTime?
 
   @@index([testId])
   @@index([email])
@@ -183,16 +259,20 @@ model Attempt {
 }
 
 model Response {
-  id              String   @id @default(cuid())
-  attemptId       String
-  attempt         Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  questionId      String
+  id               String   @id @default(cuid())
+  attemptId        String
+  attempt          Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId       String
   // Restrict: a question with recorded responses can't be deleted (see /api/questions/[id] DELETE guard)
-  question        Question @relation(fields: [questionId], references: [id], onDelete: Restrict)
-  chosenOptionIds String[]
-  numericValue    Float?
-  timeSpentMs     Int
-  answeredAt      DateTime @default(now())
+  question         Question @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  chosenOptionIds  String[]
+  numericValue     Float?
+  codeSubmission   String?
+  codeLanguage     String?
+  testCasesPassed  Int?
+  testCasesTotal   Int?
+  timeSpentMs      Int
+  answeredAt       DateTime @default(now())
 
   @@unique([attemptId, questionId]) // idempotent writes
   @@index([questionId])

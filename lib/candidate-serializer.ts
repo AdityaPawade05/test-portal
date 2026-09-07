@@ -8,12 +8,22 @@ type OptionRecord = {
   isCorrect: boolean;
 };
 
+type TestCaseRecord = {
+  id: string;
+  input: string;
+  expectedOut: string;
+  isHidden: boolean;
+  order: number;
+};
+
 type QuestionRecord = {
   id: string;
   type: string;
   stem: string;
   mediaUrl: string | null;
+  starterCode?: string | null;
   options: OptionRecord[];
+  testCases?: TestCaseRecord[];
 };
 
 export type CandidateOption = {
@@ -21,12 +31,21 @@ export type CandidateOption = {
   label: string;
 };
 
+export type CandidateTestCase = {
+  id: string;
+  input: string;
+  expectedOut: string;
+  order: number;
+};
+
 export type CandidateQuestion = {
   id: string;
   type: string;
   stem: string;
   mediaUrl: string | null;
+  starterCode?: string | null;
   options: CandidateOption[];
+  testCases?: CandidateTestCase[];
 };
 
 export function serializeQuestionForCandidate(
@@ -37,9 +56,19 @@ export function serializeQuestionForCandidate(
     type: question.type,
     stem: question.stem,
     mediaUrl: question.mediaUrl,
-    options: [...question.options]
+    starterCode: question.starterCode || null,
+    options: [...(question.options || [])]
       .sort((a, b) => a.order - b.order)
       .map((o) => ({ id: o.id, label: o.label })),
+    testCases: (question.testCases || [])
+      .filter((tc) => !tc.isHidden)
+      .sort((a, b) => a.order - b.order)
+      .map((tc) => ({
+        id: tc.id,
+        input: tc.input,
+        expectedOut: tc.expectedOut,
+        order: tc.order,
+      })),
   };
 }
 

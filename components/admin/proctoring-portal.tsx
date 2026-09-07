@@ -84,6 +84,7 @@ export function ProctoringPortal({
 }) {
   const [filter, setFilter] = useState<"ALL" | "HIGH" | "OBJECTS" | "PHONE" | "GAZE" | "MEDIUM" | "CLEAN">("ALL");
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   const highCount = attempts.filter((a) => a.severity === "HIGH").length;
   const objectCount = attempts.filter((a) => (a.objectAnomalyCount || a.phoneAnomalyCount || 0) > 0).length;
@@ -99,7 +100,9 @@ export function ProctoringPortal({
     return a.severity === filter;
   });
 
-  const selectedAttempt = attempts.find((a) => a.attemptId === selectedAttemptId);
+  const selectedAttempt = selectedAttemptId
+    ? attempts.find((a) => a.attemptId && a.attemptId === selectedAttemptId)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -334,10 +337,16 @@ export function ProctoringPortal({
             <div className="mt-4 space-y-3">
               {selectedAttempt.events.map((evt, idx) => {
                 const badge = getEventBadgeStyle(evt.type);
+                const payloadObj =
+                  evt.payload && typeof evt.payload === "object"
+                    ? (evt.payload as Record<string, unknown>)
+                    : null;
+                const snapshotUrl = typeof payloadObj?.imageUrl === "string" ? payloadObj.imageUrl : null;
+
                 return (
                   <div
                     key={evt.id || idx}
-                    className="flex items-start gap-3 p-3 rounded-lg bg-slate-50 border border-slate-100"
+                    className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100"
                   >
                     <span
                       className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase shrink-0 flex items-center gap-1 ${badge.bg} ${badge.text}`}
@@ -349,7 +358,29 @@ export function ProctoringPortal({
                       <p className="text-slate-700 font-medium">
                         Event detected at {new Date(evt.occurredAt).toLocaleTimeString()}
                       </p>
-                      {evt.payload ? (
+
+                      {/* Visual Photo Evidence if Snapshot exists */}
+                      {snapshotUrl && (
+                        <div className="mt-2 space-y-1">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewImage(snapshotUrl)}
+                            className="group relative block overflow-hidden rounded-lg border border-slate-200 bg-slate-950/20 max-w-[200px] hover:ring-2 hover:ring-blue-500 transition-all cursor-pointer"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={snapshotUrl}
+                              alt="Webcam proctoring snapshot"
+                              className="h-28 w-full object-cover group-hover:scale-105 transition-transform"
+                            />
+                            <div className="absolute inset-0 bg-slate-900/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[11px] font-bold transition-opacity">
+                              🔍 Click to Enlarge
+                            </div>
+                          </button>
+                        </div>
+                      )}
+
+                      {evt.payload && !snapshotUrl ? (
                         <pre className="mt-1 p-1.5 rounded bg-slate-200/60 font-mono text-[11px] text-slate-800 overflow-x-auto">
                           {JSON.stringify(evt.payload, null, 2)}
                         </pre>
@@ -363,12 +394,43 @@ export function ProctoringPortal({
             <div className="mt-6 flex justify-end">
               <button
                 onClick={() => setSelectedAttemptId(null)}
-                className="px-4 py-2 text-xs font-medium rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                className="px-4 py-2 text-xs font-medium rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 cursor-pointer"
               >
                 Close Timeline
               </button>
             </div>
           </Card>
+        </div>
+      )}
+
+      {/* Snapshot Image Enlarge Modal / Lightbox */}
+      {previewImage && (
+        <div
+          onClick={() => setPreviewImage(null)}
+          className="fixed inset-0 z-60 flex items-center justify-center bg-slate-950/80 backdrop-blur-xs p-4 cursor-pointer animate-in fade-in duration-150"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-2xl w-full bg-slate-900 rounded-2xl overflow-hidden border border-slate-700 shadow-2xl p-2"
+          >
+            <div className="flex items-center justify-between p-3 text-white border-b border-slate-800 text-xs font-bold">
+              <span>📹 Webcam Snapshot Evidence</span>
+              <button
+                onClick={() => setPreviewImage(null)}
+                className="text-slate-400 hover:text-white text-base"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-2 flex items-center justify-center bg-black rounded-xl overflow-hidden">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={previewImage}
+                alt="Enlarged proctoring capture"
+                className="max-h-[70vh] w-auto rounded-lg object-contain"
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

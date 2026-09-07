@@ -6,6 +6,10 @@ const answerSchema = z.object({
   questionId: z.string().min(1),
   chosenOptionIds: z.array(z.string()).default([]),
   numericValue: z.number().nullish(),
+  codeSubmission: z.string().nullish(),
+  codeLanguage: z.string().nullish(),
+  testCasesPassed: z.number().int().nullish(),
+  testCasesTotal: z.number().int().nullish(),
   // Stored for analytics only — never trusted for timing enforcement (spec section 5).
   timeSpentMs: z.number().int().min(0),
 });
@@ -30,6 +34,10 @@ export async function POST(
     const result = await submitAnswer(id, body.questionId, {
       chosenOptionIds: body.chosenOptionIds,
       numericValue: body.numericValue ?? undefined,
+      codeSubmission: body.codeSubmission ?? undefined,
+      codeLanguage: body.codeLanguage ?? undefined,
+      testCasesPassed: body.testCasesPassed ?? undefined,
+      testCasesTotal: body.testCasesTotal ?? undefined,
       timeSpentMs: body.timeSpentMs,
     });
 

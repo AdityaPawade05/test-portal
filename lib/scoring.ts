@@ -72,6 +72,19 @@ export async function computeScore(attemptId: string) {
         continue;
       }
 
+      if (question.type === "CODING") {
+        sectionMax += 1;
+        const resp = responseByQuestionId.get(qid);
+        if (resp && resp.testCasesTotal && resp.testCasesTotal > 0) {
+          const passRatio = (resp.testCasesPassed || 0) / resp.testCasesTotal;
+          sectionScore += passRatio >= 1 ? 1 : Math.round(passRatio * 100) / 100;
+        } else if (resp?.codeSubmission && resp.codeSubmission.trim().length > 10) {
+          // Minimal baseline credit if code was submitted
+          sectionScore += 0.5;
+        }
+        continue;
+      }
+
       if (question.type !== "MCQ_SINGLE" && question.type !== "MCQ_MULTI") {
         continue;
       }

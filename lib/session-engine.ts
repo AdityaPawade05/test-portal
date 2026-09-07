@@ -85,7 +85,10 @@ async function getOrInitSectionState(
   }
 
   // Brand new section for this attempt.
-  const servedQuestionIds = assembleQuestionOrder(section);
+  const servedQuestionIds = assembleQuestionOrder(
+    section,
+    `${attemptId}:${section.order}`,
+  );
   const state: SectionState = {
     sectionStartedAt: Date.now(),
     timeLimitSec: section.timeLimitSec,
@@ -171,7 +174,7 @@ export async function getNextQuestion(
     const questionId = state.servedQuestionIds[state.cursor];
     const question = await db.question.findUniqueOrThrow({
       where: { id: questionId },
-      include: { options: true },
+      include: { options: true, testCases: true },
     });
 
     return {
@@ -195,7 +198,15 @@ export type SubmitAnswerResult =
 export async function submitAnswer(
   attemptId: string,
   questionId: string,
-  payload: { chosenOptionIds?: string[]; numericValue?: number; timeSpentMs: number },
+  payload: {
+    chosenOptionIds?: string[];
+    numericValue?: number;
+    codeSubmission?: string;
+    codeLanguage?: string;
+    testCasesPassed?: number;
+    testCasesTotal?: number;
+    timeSpentMs: number;
+  },
 ): Promise<SubmitAnswerResult> {
   const attempt = await loadContext(attemptId);
   const sections = attempt.invitation.test.sections;
@@ -230,11 +241,19 @@ export async function submitAnswer(
       questionId,
       chosenOptionIds: payload.chosenOptionIds ?? [],
       numericValue: payload.numericValue,
+      codeSubmission: payload.codeSubmission,
+      codeLanguage: payload.codeLanguage,
+      testCasesPassed: payload.testCasesPassed,
+      testCasesTotal: payload.testCasesTotal,
       timeSpentMs: payload.timeSpentMs,
     },
     update: {
       chosenOptionIds: payload.chosenOptionIds ?? [],
       numericValue: payload.numericValue,
+      codeSubmission: payload.codeSubmission,
+      codeLanguage: payload.codeLanguage,
+      testCasesPassed: payload.testCasesPassed,
+      testCasesTotal: payload.testCasesTotal,
       timeSpentMs: payload.timeSpentMs,
     },
   });
